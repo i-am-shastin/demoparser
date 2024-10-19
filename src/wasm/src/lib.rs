@@ -1,7 +1,7 @@
 use parser::first_pass::parser_settings::rm_user_friendly_names;
 use parser::first_pass::parser_settings::ParserInputs;
 use parser::parse_demo::Parser;
-use parser::parse_demo::ParsingMode::ForceSingleThreaded;
+use parser::parse_demo::ParsingMode;
 use parser::second_pass::parser_settings::create_huffman_lookup_table;
 use parser::second_pass::variants::soa_to_aos;
 use parser::second_pass::variants::OutputSerdeHelperStruct;
@@ -10,6 +10,15 @@ use std::iter::FromIterator;
 use std::result::Result;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
+
+#[cfg(feature = "threads")]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
+const PARSING_MODE: ParsingMode = if cfg!(feature = "threads") {
+    ParsingMode::ForceRayonThreaded
+} else {
+    ParsingMode::ForceSingleThreaded
+};
 
 #[wasm_bindgen]
 pub fn parseEvent(
@@ -49,6 +58,7 @@ pub fn parseEvent(
         wanted_other_props: real_other_props,
         real_name_to_og_name: real_name_to_og_name.into(),
         wanted_events: vec![event_name.unwrap_or("none".to_string())],
+        wanted_prop_states: HashMap::default().into(),
         parse_ents: true,
         wanted_ticks: vec![],
         parse_projectiles: false,
@@ -59,7 +69,7 @@ pub fn parseEvent(
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
     };
-    let mut parser = Parser::new(settings, ForceSingleThreaded);
+    let mut parser = Parser::new(settings, PARSING_MODE);
 
     let output = match parser.parse_demo(&file) {
         Ok(output) => output,
@@ -70,6 +80,7 @@ pub fn parseEvent(
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     }
 }
+
 #[wasm_bindgen]
 pub fn parseEvents(
     file: Vec<u8>,
@@ -112,6 +123,7 @@ pub fn parseEvents(
         wanted_other_props: real_other_props,
         real_name_to_og_name: real_name_to_og_name.into(),
         wanted_events: event_names,
+        wanted_prop_states: HashMap::default().into(),
         parse_ents: true,
         wanted_ticks: vec![],
         parse_projectiles: false,
@@ -122,7 +134,7 @@ pub fn parseEvents(
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
     };
-    let mut parser = Parser::new(settings, ForceSingleThreaded);
+    let mut parser = Parser::new(settings, PARSING_MODE);
 
     let output = match parser.parse_demo(&file) {
         Ok(output) => output,
@@ -143,6 +155,7 @@ pub fn listGameEvents(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
         wanted_player_props: vec![],
         wanted_other_props: vec![],
         wanted_events: vec!["all".to_string()],
+        wanted_prop_states: HashMap::default().into(),
         parse_ents: false,
         wanted_ticks: vec![],
         parse_projectiles: false,
@@ -153,7 +166,7 @@ pub fn listGameEvents(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
     };
-    let mut parser = Parser::new(settings, ForceSingleThreaded);
+    let mut parser = Parser::new(settings, PARSING_MODE);
 
     let output = match parser.parse_demo(&fileBytes) {
         Ok(output) => output,
@@ -204,6 +217,7 @@ pub fn parseTicks(
         wanted_player_props: real_names.clone(),
         wanted_other_props: vec![],
         wanted_events: vec![],
+        wanted_prop_states: HashMap::default().into(),
         parse_ents: true,
         wanted_ticks: wanted_ticks,
         parse_projectiles: false,
@@ -214,7 +228,7 @@ pub fn parseTicks(
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
     };
-    let mut parser = Parser::new(settings, ForceSingleThreaded);
+    let mut parser = Parser::new(settings, PARSING_MODE);
 
     let output = match parser.parse_demo(&file) {
         Ok(output) => output,
@@ -259,6 +273,7 @@ pub fn parseGrenades(file: Vec<u8>) -> Result<JsValue, JsError> {
         wanted_player_props: vec![],
         wanted_other_props: vec![],
         wanted_events: vec![],
+        wanted_prop_states: HashMap::default().into(),
         parse_ents: true,
         wanted_ticks: vec![],
         parse_projectiles: true,
@@ -269,7 +284,7 @@ pub fn parseGrenades(file: Vec<u8>) -> Result<JsValue, JsError> {
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
     };
-    let mut parser = Parser::new(settings, ForceSingleThreaded);
+    let mut parser = Parser::new(settings, PARSING_MODE);
 
     let output = match parser.parse_demo(&file) {
         Ok(output) => output,
@@ -292,6 +307,7 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
         wanted_player_props: vec![],
         wanted_other_props: vec![],
         wanted_events: vec![],
+        wanted_prop_states: HashMap::default().into(),
         parse_ents: false,
         wanted_ticks: vec![],
         parse_projectiles: true,
@@ -302,7 +318,7 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
     };
-    let mut parser = Parser::new(settings, ForceSingleThreaded);
+    let mut parser = Parser::new(settings, PARSING_MODE);
     let output = match parser.parse_demo(&file) {
         Ok(output) => output,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
