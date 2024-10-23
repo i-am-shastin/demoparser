@@ -1,7 +1,7 @@
 use crate::first_pass::prop_controller::PropInfo;
 use crate::second_pass::collect_data::ProjectileRecord;
 use crate::second_pass::parser_settings::{EconItem, PlayerEndMetaData};
-use ahash::HashMap;
+use ahash::AHashMap;
 use itertools::Itertools;
 use memmap2::Mmap;
 use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
@@ -659,7 +659,7 @@ impl BytesVariant {
 #[derive(Debug, Clone)]
 pub struct OutputSerdeHelperStruct {
     pub prop_infos: Vec<PropInfo>,
-    pub inner: HashMap<u32, PropColumn>,
+    pub inner: AHashMap<u32, PropColumn>,
 }
 pub fn soa_to_aos(soa: OutputSerdeHelperStruct) -> Vec<std::collections::HashMap<String, Option<Variant>>> {
     let mut total_rows = 0;
