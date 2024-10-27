@@ -16,10 +16,7 @@ use ahash::AHashSet;
 use ahash::RandomState;
 use csgoproto::CDemoSendTables;
 use csgoproto::csvc_msg_game_event_list::DescriptorT;
-use memmap2::Mmap;
-use memmap2::MmapOptions;
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -176,16 +173,3 @@ pub fn rm_map_user_friendly_names(map: &AHashMap<String, Variant>) -> Result<AHa
     Ok(real_names_map)
 }
 
-pub fn create_mmap(path: String) -> Result<Mmap, DemoParserError> {
-    let file = match File::open(path) {
-        Err(e) => return Err(DemoParserError::FileNotFound(format!("{}", e))),
-        Ok(f) => f,
-    };
-    let mmap = unsafe {
-        match MmapOptions::new().map(&file) {
-            Err(e) => return Err(DemoParserError::FileNotFound(format!("{}", e))),
-            Ok(f) => f,
-        }
-    };
-    Ok(mmap)
-}

@@ -1,7 +1,9 @@
 use crate::first_pass::prop_controller::PropInfo;
+use crate::parse_demo::DemoOutput;
 use crate::second_pass::collect_data::ProjectileRecord;
 use crate::second_pass::parser_settings::{EconItem, PlayerEndMetaData};
 use ahash::AHashMap;
+use std::collections::HashMap;
 use itertools::Itertools;
 use memmap2::Mmap;
 use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
@@ -647,6 +649,13 @@ where
         }
     }
 }
+
+impl From<Vec<u8>> for BytesVariant {
+    fn from(val: Vec<u8>) -> Self {
+        BytesVariant::Vec(val)
+    }
+}
+
 impl BytesVariant {
     pub fn get_len(&self) -> usize {
         match self {
@@ -661,15 +670,50 @@ pub struct OutputSerdeHelperStruct {
     pub prop_infos: Vec<PropInfo>,
     pub inner: AHashMap<u32, PropColumn>,
 }
-pub fn soa_to_aos(soa: OutputSerdeHelperStruct) -> Vec<std::collections::HashMap<String, Option<Variant>>> {
+
+#[derive(Serialize)]
+pub enum SerdeOutput {
+    PerPlayer(HashMap<u64, OutputSerdeHelperStruct>),
+    StructOfArrays(OutputSerdeHelperStruct),
+    ArrayOfStructs(Vec<HashMap<String, Option<Variant>>>),
+}
+
+pub fn to_serde_output(demo_output: DemoOutput, order_by_steamid: bool, struct_of_arrays: bool) -> SerdeOutput {
+    let mut prop_infos = demo_output.prop_controller.prop_infos;
+    prop_infos.sort_by_key(|x| x.prop_name.clone());
+
+    if order_by_steamid {
+        let mut per_player_hashmap = HashMap::with_capacity(demo_output.df_per_player.len());
+        for (player_id, value) in demo_output.df_per_player {
+            let helper = OutputSerdeHelperStruct {
+                prop_infos: prop_infos.clone(),
+                inner: value,
+            };
+            per_player_hashmap.insert(player_id, helper);
+        }
+        SerdeOutput::PerPlayer(per_player_hashmap)
+    } else {
+        let helper = OutputSerdeHelperStruct {
+            prop_infos,
+            inner: demo_output.df,
+        };
+
+        if struct_of_arrays {
+            SerdeOutput::StructOfArrays(helper)
+        } else {
+            SerdeOutput::ArrayOfStructs(soa_to_aos(helper))
+        }
+    }
+}
+
+pub fn soa_to_aos(soa: OutputSerdeHelperStruct) -> Vec<HashMap<String, Option<Variant>>> {
     let mut total_rows = 0;
     for (_, v) in &soa.inner {
         total_rows = v.len();
     }
     let mut v = Vec::with_capacity(total_rows);
     for idx in 0..total_rows {
-        let mut hm: std::collections::HashMap<String, Option<Variant>> =
-            std::collections::HashMap::with_capacity(soa.prop_infos.len());
+        let mut hm: HashMap<String, Option<Variant>> = HashMap::with_capacity(soa.prop_infos.len());
         for prop_info in &soa.prop_infos {
             if soa.inner.contains_key(&prop_info.id) {
                 match &soa.inner[&prop_info.id].data {

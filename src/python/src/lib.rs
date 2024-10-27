@@ -1,19 +1,13 @@
 use ahash::AHashMap;
 use itertools::Itertools;
-use memmap2::Mmap;
-use parser::first_pass::parser_settings::create_mmap;
-use parser::first_pass::parser_settings::rm_map_user_friendly_names;
-use parser::first_pass::parser_settings::rm_user_friendly_names;
-use parser::first_pass::parser_settings::ParserInputs;
+use parser::exports;
 use parser::first_pass::read_bits::DemoParserError;
-use parser::parse_demo::Parser;
 use parser::second_pass::game_events::EventField;
 use parser::second_pass::game_events::GameEvent;
 use parser::second_pass::parser_settings::create_huffman_lookup_table;
+use parser::second_pass::variants::BytesVariant;
 use parser::second_pass::variants::VarVec;
 use parser::second_pass::variants::Variant;
-#[cfg(feature = "voice")]
-use parser::second_pass::voice_data::convert_voice_data_to_wav;
 use polars::prelude::ArrayRef;
 use polars::prelude::ArrowField;
 use polars::prelude::NamedFrom;
@@ -31,7 +25,6 @@ use pyo3::types::PyDict;
 use pyo3::types::PyList;
 use pyo3::Python;
 use pyo3::{PyAny, PyObject, PyResult};
-use std::sync::Arc;
 
 use pyo3::create_exception;
 create_exception!(DemoParser, Exception, pyo3::exceptions::PyException);
@@ -68,16 +61,20 @@ struct WantedPropState {
     state: PyVariant,
 }
 
+fn to_py_err<T>(e: T) -> PyErr
+where
+    T: std::fmt::Display
+{
+    Exception::new_err(format!("{e}"))
+}
+
 #[pymethods]
 impl DemoParser {
     #[new]
     pub fn py_new(demo_path: String) -> PyResult<Self> {
-        let mmap = match create_mmap(demo_path.clone()) {
-            Ok(mmap) => mmap,
-            Err(e) => return Err(Exception::new_err(format!("{e}. File name: {demo_path}"))),
-        };
+        let bytes = exports::create_mmap(&demo_path).map_err(|e| Exception::new_err(format!("{e}. File name: {demo_path}")))?;
         let huf = create_huffman_lookup_table();
-        Ok(Self { mmap, huf })
+        Ok(Self { bytes, huf })
     }
 
     /// Parses header message (different from the first 16 bytes of the file)
@@ -88,58 +85,14 @@ impl DemoParser {
     /// "allow_clientside_particles", "demo_version_name", "demo_version_guid",
     /// "client_name", "game_directory"
     pub fn parse_header(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let settings = ParserInputs {
-            real_name_to_og_name: AHashMap::default(),
-            wanted_players: vec![],
-            wanted_player_props: vec![],
-            wanted_other_props: vec![],
-            wanted_prop_states: AHashMap::default(),
-            wanted_events: vec![],
-            parse_ents: false,
-            wanted_ticks: vec![],
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        Ok(output
-            .header
-            .unwrap_or_else(AHashMap::default)
-            .to_object(py))
+        let header = exports::parse_header(&self.bytes, &self.huf, parser::parse_demo::ParsingMode::Normal).map_err(to_py_err)?;
+        Ok(header.to_object(py))
     }
+
     /// Returns the names of game events present in the demo
     pub fn list_game_events(&self, _py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let settings = ParserInputs {
-            real_name_to_og_name: AHashMap::default(),
-            wanted_players: vec![],
-            wanted_player_props: vec![],
-            wanted_other_props: vec![],
-            wanted_prop_states: AHashMap::default(),
-            wanted_events: vec!["all".to_string()],
-            parse_ents: false,
-            wanted_ticks: vec![],
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        let as_vec = output.game_events_counter.iter().collect_vec();
-        let ge = pyo3::Python::with_gil(|py| as_vec.to_object(py));
-        Ok(ge)
+        let game_events = exports::list_game_events(&self.bytes, &self.huf, parser::parse_demo::ParsingMode::Normal).map_err(to_py_err)?;
+        Ok(pyo3::Python::with_gil(|py| game_events.to_object(py)))
     }
 
     /// Returns all coordinates of all grenades along with info about thrower.
@@ -149,43 +102,18 @@ impl DemoParser {
     /// 0 -388.875  1295.46875 -5120.0   982              NaN    HeGrenade
     /// 1 -388.875  1295.46875 -5120.0   983              NaN    HeGrenade
     /// 2 -388.875  1295.46875 -5120.0   983              NaN    HeGrenade
-
     pub fn parse_grenades(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let settings = ParserInputs {
-            real_name_to_og_name: AHashMap::default(),
-            wanted_players: vec![],
-            wanted_player_props: vec![],
-            wanted_other_props: vec![],
-            wanted_prop_states: AHashMap::default(),
-            wanted_events: vec![],
-            parse_ents: true,
-            wanted_ticks: vec![],
-            parse_projectiles: true,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
+        let projectiles = exports::parse_grenades(&self.bytes, &self.huf, parser::parse_demo::ParsingMode::Normal).map_err(to_py_err)?;
 
-        let entity_id: Vec<Option<i32>> = output.projectiles.iter().map(|s| s.entity_id).collect();
-        let xs: Vec<Option<f32>> = output.projectiles.iter().map(|s| s.x).collect();
-        let ys: Vec<Option<f32>> = output.projectiles.iter().map(|s| s.y).collect();
-        let zs: Vec<Option<f32>> = output.projectiles.iter().map(|s| s.z).collect();
+        let entity_id: Vec<Option<i32>> = projectiles.iter().map(|s| s.entity_id).collect();
+        let xs: Vec<Option<f32>> = projectiles.iter().map(|s| s.x).collect();
+        let ys: Vec<Option<f32>> = projectiles.iter().map(|s| s.y).collect();
+        let zs: Vec<Option<f32>> = projectiles.iter().map(|s| s.z).collect();
 
-        let ticks: Vec<Option<i32>> = output.projectiles.iter().map(|s| s.tick).collect();
-        let steamid: Vec<Option<u64>> = output.projectiles.iter().map(|s| s.steamid).collect();
-        let name: Vec<Option<String>> = output.projectiles.iter().map(|s| s.name.clone()).collect();
-        let grenade_type: Vec<Option<String>> = output
-            .projectiles
-            .iter()
-            .map(|s| s.grenade_type.clone())
-            .collect();
+        let ticks: Vec<Option<i32>> = projectiles.iter().map(|s| s.tick).collect();
+        let steamid: Vec<Option<u64>> = projectiles.iter().map(|s| s.steamid).collect();
+        let name: Vec<Option<String>> = projectiles.iter().map(|s| s.name.clone()).collect();
+        let grenade_type: Vec<Option<String>> = projectiles.iter().map(|s| s.grenade_type.clone()).collect();
 
         // SoA form
         let xs = arr_to_py(Box::new(Float32Array::from(xs))).unwrap();
@@ -221,32 +149,13 @@ impl DemoParser {
             Ok(pandas_df.to_object(py))
         })
     }
+
     pub fn parse_player_info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let settings = ParserInputs {
-            real_name_to_og_name: AHashMap::default(),
-            wanted_players: vec![],
-            wanted_player_props: vec![],
-            wanted_other_props: vec![],
-            wanted_prop_states: AHashMap::default(),
-            wanted_events: vec![],
-            parse_ents: false,
-            wanted_ticks: vec![],
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        let steamids: Vec<Option<u64>> = output.player_md.iter().map(|p| p.steamid).collect();
-        let team_numbers: Vec<Option<i32>> =
-            output.player_md.iter().map(|p| p.team_number).collect();
-        let names: Vec<Option<String>> = output.player_md.iter().map(|p| p.name.clone()).collect();
+        let player_md = exports::parse_player_info(&self.bytes, &self.huf, parser::parse_demo::ParsingMode::Normal).map_err(to_py_err)?;
+
+        let steamids: Vec<Option<u64>> = player_md.iter().map(|p| p.steamid).collect();
+        let team_numbers: Vec<Option<i32>> = player_md.iter().map(|p| p.team_number).collect();
+        let names: Vec<Option<String>> = player_md.iter().map(|p| p.name.clone()).collect();
 
         // SoA form
         let steamid = rust_series_to_py_series(&Series::new("Steamid", steamids))?;
@@ -266,42 +175,20 @@ impl DemoParser {
             Ok(pandas_df.to_object(py))
         })
     }
+
     pub fn parse_item_drops(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let settings = ParserInputs {
-            real_name_to_og_name: AHashMap::default(),
-            wanted_players: vec![],
-            wanted_player_props: vec![],
-            wanted_other_props: vec![],
-            wanted_prop_states: AHashMap::default(),
-            wanted_events: vec![],
-            parse_ents: false,
-            wanted_ticks: vec![],
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        let def_index: Vec<Option<u32>> = output.item_drops.iter().map(|x| x.def_index).collect();
-        let account_id: Vec<Option<u32>> = output.item_drops.iter().map(|x| x.account_id).collect();
-        let dropreason: Vec<Option<u32>> = output.item_drops.iter().map(|x| x.dropreason).collect();
-        let inventory: Vec<Option<u32>> = output.item_drops.iter().map(|x| x.inventory).collect();
-        let item_id: Vec<Option<u64>> = output.item_drops.iter().map(|x| x.item_id).collect();
-        let paint_index: Vec<Option<u32>> =
-            output.item_drops.iter().map(|x| x.paint_index).collect();
-        let paint_seed: Vec<Option<u32>> = output.item_drops.iter().map(|x| x.paint_seed).collect();
-        let paint_wear: Vec<Option<u32>> = output.item_drops.iter().map(|x| x.paint_wear).collect();
-        let custom_name: Vec<Option<String>> = output
-            .item_drops
-            .iter()
-            .map(|x| x.custom_name.clone())
-            .collect();
+        let item_drops = exports::parse_item_drops(&self.bytes, &self.huf, parser::parse_demo::ParsingMode::Normal).map_err(to_py_err)?;
+
+        let def_index: Vec<Option<u32>> = item_drops.iter().map(|x| x.def_index).collect();
+        let account_id: Vec<Option<u32>> = item_drops.iter().map(|x| x.account_id).collect();
+        let dropreason: Vec<Option<u32>> = item_drops.iter().map(|x| x.dropreason).collect();
+        let inventory: Vec<Option<u32>> = item_drops.iter().map(|x| x.inventory).collect();
+        let item_id: Vec<Option<u64>> = item_drops.iter().map(|x| x.item_id).collect();
+        let paint_index: Vec<Option<u32>> = item_drops.iter().map(|x| x.paint_index).collect();
+        let paint_seed: Vec<Option<u32>> = item_drops.iter().map(|x| x.paint_seed).collect();
+        let paint_wear: Vec<Option<u32>> = item_drops.iter().map(|x| x.paint_wear).collect();
+        let custom_name: Vec<Option<String>> = item_drops.iter().map(|x| x.custom_name.clone()).collect();
+
         // SoA form
         let account_id = arr_to_py(Box::new(UInt32Array::from(account_id)))?;
         let def_index = arr_to_py(Box::new(UInt32Array::from(def_index)))?;
@@ -347,37 +234,17 @@ impl DemoParser {
             Ok(pandas_df.to_object(py))
         })
     }
-    pub fn parse_skins(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let settings = ParserInputs {
-            real_name_to_og_name: AHashMap::default(),
-            wanted_players: vec![],
-            wanted_player_props: vec![],
-            wanted_other_props: vec![],
-            wanted_prop_states: AHashMap::default(),
-            wanted_events: vec![],
-            parse_ents: false,
-            wanted_ticks: vec![],
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
 
-        let def_idx_vec: Vec<Option<u32>> = output.skins.iter().map(|s| s.def_index).collect();
-        let item_id: Vec<Option<u64>> = output.skins.iter().map(|s| s.item_id).collect();
-        let paint_index: Vec<Option<u32>> = output.skins.iter().map(|s| s.paint_index).collect();
-        let paint_seed: Vec<Option<u32>> = output.skins.iter().map(|s| s.paint_seed).collect();
-        let paint_wear: Vec<Option<u32>> = output.skins.iter().map(|s| s.paint_wear).collect();
-        let steamid: Vec<Option<u64>> = output.skins.iter().map(|s| s.steamid).collect();
-        let custom_name: Vec<Option<String>> =
-            output.skins.iter().map(|s| s.custom_name.clone()).collect();
+    pub fn parse_skins(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let skins = exports::parse_player_skins(&self.bytes, &self.huf, parser::parse_demo::ParsingMode::Normal).map_err(to_py_err)?;
+
+        let def_idx_vec: Vec<Option<u32>> = skins.iter().map(|s| s.def_index).collect();
+        let item_id: Vec<Option<u64>> = skins.iter().map(|s| s.item_id).collect();
+        let paint_index: Vec<Option<u32>> = skins.iter().map(|s| s.paint_index).collect();
+        let paint_seed: Vec<Option<u32>> = skins.iter().map(|s| s.paint_seed).collect();
+        let paint_wear: Vec<Option<u32>> = skins.iter().map(|s| s.paint_wear).collect();
+        let steamid: Vec<Option<u64>> = skins.iter().map(|s| s.steamid).collect();
+        let custom_name: Vec<Option<String>> = skins.iter().map(|s| s.custom_name.clone()).collect();
 
         let def_index = arr_to_py(Box::new(UInt32Array::from(def_idx_vec)))?;
         let item_id = arr_to_py(Box::new(UInt64Array::from(item_id)))?;
@@ -426,55 +293,15 @@ impl DemoParser {
         player: Option<Vec<String>>,
         other: Option<Vec<String>>,
     ) -> PyResult<Py<PyAny>> {
-        let wanted_player_props = player.unwrap_or_default();
-        let wanted_other_props = other.unwrap_or_default();
-
-        let real_player_props = rm_user_friendly_names(&wanted_player_props);
-        let real_other_props = rm_user_friendly_names(&wanted_other_props);
-
-        let real_player_props = match real_player_props {
-            Ok(real_props) => real_props,
-            Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
-        };
-        let real_other_props = match real_other_props {
-            Ok(real_props) => real_props,
-            Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
-        };
-
-        let mut real_name_to_og_name = AHashMap::default();
-        for (real_name, user_friendly_name) in real_player_props.iter().zip(&wanted_player_props) {
-            real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
-        }
-        for (real_name, user_friendly_name) in real_other_props.iter().zip(&wanted_other_props) {
-            real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
-        }
-
-        let settings = ParserInputs {
-            real_name_to_og_name,
-            wanted_players: vec![],
-            wanted_player_props: real_player_props,
-            wanted_other_props: real_other_props,
-            wanted_events: vec![event_name],
-            wanted_prop_states: AHashMap::default(),
-            parse_ents: true,
-            wanted_ticks: vec![],
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        let event_series = match series_from_event(&output.game_events, py) {
-            Ok(ser) => ser,
-            Err(_e) => return Ok(PyList::empty_bound(py).into()),
-        };
-        Ok(event_series)
+        let game_events = exports::parse_event(
+            &self.bytes,
+            &self.huf,
+            parser::parse_demo::ParsingMode::Normal,
+            event_name,
+            player,
+            other
+        ).map_err(to_py_err)?;
+        series_from_event(&game_events, py).or_else(|_| Ok(PyList::empty_bound(py).into()))
     }
 
     #[pyo3(signature = (event_name, *, player=None, other=None))]
@@ -485,86 +312,27 @@ impl DemoParser {
         player: Option<Vec<String>>,
         other: Option<Vec<String>>,
     ) -> PyResult<Py<PyAny>> {
-        let wanted_player_props = player.unwrap_or_default();
-        let wanted_other_props = other.unwrap_or_default();
-
-        let real_player_props = rm_user_friendly_names(&wanted_player_props);
-        let real_other_props = rm_user_friendly_names(&wanted_other_props);
-
-        let real_player_props = match real_player_props {
-            Ok(real_props) => real_props,
-            Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
-        };
-        let real_other_props = match real_other_props {
-            Ok(real_props) => real_props,
-            Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
-        };
-
-        let mut real_name_to_og_name = AHashMap::default();
-        for (real_name, user_friendly_name) in real_player_props.iter().zip(&wanted_player_props) {
-            real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
-        }
-        for (real_name, user_friendly_name) in real_other_props.iter().zip(&wanted_other_props) {
-            real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
-        }
-
-        let settings = ParserInputs {
-            real_name_to_og_name,
-            wanted_players: vec![],
-            wanted_player_props: real_player_props,
-            wanted_other_props: real_other_props,
-            wanted_events: event_name,
-            wanted_prop_states: AHashMap::default(),
-            parse_ents: true,
-            wanted_ticks: vec![],
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &self.huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        let event_series = match series_from_multiple_events(&output.game_events, py) {
-            Ok(ser) => ser,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        Ok(event_series)
+        let game_events = exports::parse_events(
+            &self.bytes,
+            &self.huf,
+            parser::parse_demo::ParsingMode::Normal,
+            event_name,
+            player,
+            other
+        ).map_err(to_py_err)?;
+        series_from_multiple_events(&game_events, py).map_err(to_py_err)
     }
+
     #[cfg(feature = "voice")]
     pub fn parse_voice(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let settings = ParserInputs {
-            wanted_players: vec![],
-            wanted_player_props: vec![],
-            wanted_other_props: vec![],
-            wanted_prop_states: AHashMap::default(),
-            wanted_events: vec![],
-            wanted_ticks: vec![],
-            real_name_to_og_name: AHashMap::default(),
-            parse_ents: false,
-            parse_projectiles: false,
-            only_header: false,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &vec![],
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
-        };
-        let out = convert_voice_data_to_wav(output.voice_data).unwrap();
-        let mut out_hm = AHashMap::default();
-        for (steamid, bytes) in out {
+        let voice_data = exports::parse_voice(&self.bytes, parser::parse_demo::ParsingMode::Normal).map_err(to_py_err)?;
+
+        let mut voice_hashmap = AHashMap::default();
+        for (steamid, bytes) in voice_data {
             let py_bytes = PyBytes::new_bound(py, &bytes);
-            out_hm.insert(steamid, py_bytes);
+            voice_hashmap.insert(steamid, py_bytes);
         }
-        Ok(out_hm.to_object(py))
+        Ok(voice_hashmap.to_object(py))
     }
 
     #[pyo3(signature = (wanted_props, *, players=None, ticks=None, prop_states=None))]
@@ -576,58 +344,19 @@ impl DemoParser {
         ticks: Option<Vec<i32>>,
         prop_states: Option<Vec<WantedPropState>>,
     ) -> PyResult<PyObject> {
-        let wanted_players = players.unwrap_or_default();
-        let wanted_ticks = ticks.unwrap_or_default();
-        let wanted_prop_states = prop_states
-            .unwrap_or_default()
-            .into_iter()
-            .map(|prop| (prop.prop, prop.state.0))
-            .collect();
-        let real_props = rm_user_friendly_names(&wanted_props);
-        let real_wanted_prop_states = rm_map_user_friendly_names(&wanted_prop_states);
+        let wanted_prop_states = prop_states.unwrap_or_default().into_iter().map(|prop| (prop.prop, prop.state.0)).collect();
 
-        let real_props = match real_props {
-            Ok(real_props) => real_props,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
-        let real_wanted_prop_states = match real_wanted_prop_states {
-            Ok(real_wanted_prop_states) => real_wanted_prop_states,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
+        let output = exports::parse_ticks(
+            &self.bytes,
+            &self.huf,
+            parser::parse_demo::ParsingMode::Normal,
+            wanted_props,
+            ticks,
+            players,
+            wanted_prop_states,
+            false
+        ).map_err(to_py_err)?;
 
-        let arc_huf = Arc::new(&self.huf);
-        let mut real_name_to_og_name = AHashMap::default();
-        for (real_name, user_friendly_name) in real_props.iter().zip(&wanted_props) {
-            real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
-        }
-        for (real_name, user_friendly_name) in real_wanted_prop_states
-            .keys()
-            .zip(wanted_prop_states.keys())
-        {
-            real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
-        }
-
-        let settings = ParserInputs {
-            real_name_to_og_name,
-            wanted_players,
-            wanted_player_props: real_props,
-            wanted_other_props: vec![],
-            wanted_events: vec![],
-            wanted_prop_states: real_wanted_prop_states,
-            parse_ents: true,
-            wanted_ticks,
-            parse_projectiles: false,
-            only_header: true,
-            count_props: false,
-            only_convars: false,
-            huffman_lookup_table: &arc_huf,
-            order_by_steamid: false,
-        };
-        let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
-        let output = match parser.parse_demo(&self.mmap) {
-            Ok(output) => output,
-            Err(e) => return Err(Exception::new_err(format!("{e}"))),
-        };
         let mut all_series = vec![];
         let mut all_pyobjects = vec![];
         let prop_infos = output.prop_controller.prop_infos;
@@ -812,7 +541,7 @@ pub fn arr_to_py(array: Box<dyn Array>) -> PyResult<PyObject> {
 }
 #[pyclass]
 struct DemoParser {
-    mmap: Mmap,
+    bytes: BytesVariant,
     huf: Vec<(u8, u8)>,
 }
 
