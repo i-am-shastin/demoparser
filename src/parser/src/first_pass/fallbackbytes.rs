@@ -1,4 +1,4 @@
-pub static GAME_EVENT_LIST_FALLBACK_BYTES: &'static [u8] = &[
+pub static GAME_EVENT_LIST_FALLBACK_BYTES: &[u8] = &[
     10,
     144,
     1,

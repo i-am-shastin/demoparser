@@ -1,12 +1,5 @@
-use crate::first_pass::read_bits::{Bitreader, DemoParserError};
-
-#[inline(always)]
-pub fn generate_fp() -> FieldPath {
-    FieldPath {
-        path: [-1, 0, 0, 0, 0, 0, 0],
-        last: 0,
-    }
-}
+use crate::definitions::DemoParserError;
+use crate::first_pass::read_bits::Bitreader;
 
 #[inline(always)]
 pub fn do_op(opcode: u8, bitreader: &mut Bitreader, field_path: &mut FieldPath) -> Result<(), DemoParserError> {
@@ -53,7 +46,7 @@ pub fn do_op(opcode: u8, bitreader: &mut Bitreader, field_path: &mut FieldPath) 
         36 => non_topo_complex(bitreader, field_path),
         37 => non_topo_penultimate_plus_one(bitreader, field_path),
         38 => non_topo_complex_pack4_bits(bitreader, field_path),
-        _ => Err(DemoParserError::UnknownPathOP),
+        _ => Err(DemoParserError::UnknownPathOp),
     }
 }
 
@@ -62,6 +55,16 @@ pub struct FieldPath {
     pub path: [i32; 7],
     pub last: usize,
 }
+
+impl Default for FieldPath {
+    fn default() -> FieldPath {
+        FieldPath {
+            path: [-1, 0, 0, 0, 0, 0, 0],
+            last: 0,
+        }
+    }
+}
+
 impl FieldPath {
     pub fn pop_special(&mut self, n: usize) -> Result<(), DemoParserError> {
         for _ in 0..n {
@@ -70,11 +73,10 @@ impl FieldPath {
         }
         Ok(())
     }
+
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     pub fn get_entry_mut(&mut self, idx: usize) -> Result<&mut i32, DemoParserError> {
-        match self.path.get_mut(idx) {
-            Some(entry) => Ok(entry),
-            None => return Err(DemoParserError::IllegalPathOp),
-        }
+        self.path.get_mut(idx).ok_or_else(|| DemoParserError::IllegalPathOp)
     }
 }
 
@@ -143,20 +145,14 @@ fn push_one_left_delta_n_right_non_zero(bitreader: &mut Bitreader, field_path: &
     Ok(())
 }
 
-fn push_one_left_delta_n_right_non_zero_pack6_bits(
-    bitreader: &mut Bitreader,
-    field_path: &mut FieldPath,
-) -> Result<(), DemoParserError> {
+fn push_one_left_delta_n_right_non_zero_pack6_bits(bitreader: &mut Bitreader, field_path: &mut FieldPath) -> Result<(), DemoParserError> {
     *field_path.get_entry_mut(field_path.last)? += (bitreader.read_nbits(3)? + 2) as i32;
     field_path.last += 1;
     *field_path.get_entry_mut(field_path.last)? = (bitreader.read_nbits(3)? + 1) as i32;
     Ok(())
 }
 
-fn push_one_left_delta_n_right_non_zero_pack8_bits(
-    bitreader: &mut Bitreader,
-    field_path: &mut FieldPath,
-) -> Result<(), DemoParserError> {
+fn push_one_left_delta_n_right_non_zero_pack8_bits(bitreader: &mut Bitreader, field_path: &mut FieldPath) -> Result<(), DemoParserError> {
     *field_path.get_entry_mut(field_path.last)? += (bitreader.read_nbits(4)? + 2) as i32;
     field_path.last += 1;
     *field_path.get_entry_mut(field_path.last)? = (bitreader.read_nbits(4)? + 1) as i32;

@@ -1,4 +1,7 @@
-use crate::first_pass::read_bits::{Bitreader, DemoParserError};
+#![allow(clippy::unnecessary_lazy_evaluations)]
+
+use crate::definitions::DemoParserError;
+use crate::first_pass::read_bits::Bitreader;
 use crate::second_pass::decoder::Decoder::*;
 use crate::second_pass::variants::Variant;
 use ahash::AHashMap;
@@ -29,11 +32,13 @@ pub enum Decoder {
     QanglePresDecoder,
     GameModeRulesDecoder,
 }
+
 #[derive(Debug, Clone)]
 pub struct QfMapper {
     pub idx: u32,
     pub map: AHashMap<u32, QuantalizedFloat>,
 }
+
 impl<'a> Bitreader<'a> {
     #[inline(always)]
     pub fn decode(&mut self, decoder: &Decoder, qf_map: &QfMapper) -> Result<Variant, DemoParserError> {
@@ -42,27 +47,28 @@ impl<'a> Bitreader<'a> {
             FloatSimulationTimeDecoder => Ok(Variant::F32(self.decode_simul_time()?)),
             UnsignedDecoder => Ok(Variant::U32(self.read_varint()?)),
             QuantalizedFloatDecoder(qf_idx) => Ok(self.decode_qfloat(*qf_idx, qf_map)?),
-            Qangle3Decoder => Ok(Variant::VecXYZ(self.decode_qangle_all_3()?)),
+            Qangle3Decoder => Ok(Variant::XYZVec(self.decode_qangle_all_3()?)),
             SignedDecoder => Ok(Variant::I32(self.read_varint32()?)),
-            VectorNoscaleDecoder => Ok(Variant::VecXYZ(self.decode_vector_noscale()?)),
+            VectorNoscaleDecoder => Ok(Variant::XYZVec(self.decode_vector_noscale()?)),
             BooleanDecoder => Ok(Variant::Bool(self.read_boolean()?)),
             BaseDecoder => Ok(Variant::U32(self.read_varint()?)),
             CentityHandleDecoder => Ok(Variant::U32(self.read_varint()?)),
             ComponentDecoder => Ok(Variant::Bool(self.read_boolean()?)),
             FloatCoordDecoder => Ok(Variant::F32(self.read_bit_coord()?)),
             StringDecoder => Ok(Variant::String(self.read_string()?)),
-            QanglePitchYawDecoder => Ok(Variant::VecXYZ(self.decode_qangle_pitch_yaw()?)),
-            QangleVarDecoder => Ok(Variant::VecXYZ(self.decode_qangle_variant()?)),
-            VectorNormalDecoder => Ok(Variant::VecXYZ(self.decode_normal_vec()?)),
+            QanglePitchYawDecoder => Ok(Variant::XYZVec(self.decode_qangle_pitch_yaw()?)),
+            QangleVarDecoder => Ok(Variant::XYZVec(self.decode_qangle_variant()?)),
+            VectorNormalDecoder => Ok(Variant::XYZVec(self.decode_normal_vec()?)),
             Unsigned64Decoder => Ok(Variant::U64(self.read_varint_u_64()?)),
             Fixed64Decoder => Ok(Variant::U64(self.decode_uint64()?)),
-            VectorFloatCoordDecoder => Ok(Variant::VecXYZ(self.decode_vector_float_coord()?)),
+            VectorFloatCoordDecoder => Ok(Variant::XYZVec(self.decode_vector_float_coord()?)),
             AmmoDecoder => Ok(Variant::U32(self.decode_ammo()?)),
-            QanglePresDecoder => Ok(Variant::VecXYZ(self.decode_qangle_variant_pres()?)),
+            QanglePresDecoder => Ok(Variant::XYZVec(self.decode_qangle_variant_pres()?)),
             GameModeRulesDecoder => Ok(Variant::U32(self.read_nbits(7)?)),
         }
     }
-    pub fn decode_qangle_variant_pres(&mut self) -> Result<[f32; 3], DemoParserError> {
+
+    fn decode_qangle_variant_pres(&mut self) -> Result<[f32; 3], DemoParserError> {
         let mut v = [0.0; 3];
 
         let has_x = self.read_boolean()?;
@@ -81,46 +87,51 @@ impl<'a> Bitreader<'a> {
         Ok(v)
     }
 
-    pub fn read_bit_coord_pres(&mut self) -> Result<f32, DemoParserError> {
-        return Ok(self.read_nbits(20)? as f32 * 360.0 / (1 << 20) as f32 - 180.0);
+    fn read_bit_coord_pres(&mut self) -> Result<f32, DemoParserError> {
+        Ok(self.read_nbits(20)? as f32 * 360.0 / (1 << 20) as f32 - 180.0)
     }
-    pub fn decode_qfloat(&mut self, qf_idx: u8, qf_map: &QfMapper) -> Result<Variant, DemoParserError> {
-        match qf_map.map.get(&(qf_idx as u32)) {
-            Some(qf) => Ok(Variant::F32(qf.decode(self)?)),
-            None => Err(DemoParserError::MalformedMessage),
-        }
+
+    fn decode_qfloat(&mut self, qf_idx: u8, qf_map: &QfMapper) -> Result<Variant, DemoParserError> {
+        qf_map.map.get(&(qf_idx as u32))
+            .ok_or_else(|| DemoParserError::MalformedMessage)
+            .and_then(|qf| Ok(Variant::F32(qf.decode(self)?)))
     }
-    pub fn decode_vector_float_coord(&mut self) -> Result<[f32; 3], DemoParserError> {
+
+    fn decode_vector_float_coord(&mut self) -> Result<[f32; 3], DemoParserError> {
         let mut v = [0.0; 3];
-        for idx in 0..3 {
-            v[idx] = self.decode_float_coord()?;
+        for idx in &mut v {
+            *idx = self.decode_float_coord()?;
         }
         Ok(v)
     }
-    pub fn decode_ammo(&mut self) -> Result<u32, DemoParserError> {
+
+    fn decode_ammo(&mut self) -> Result<u32, DemoParserError> {
         let ammo = self.read_varint()?;
         if ammo > 0 {
             return Ok(ammo - 1);
         }
-        return Ok(ammo);
+        Ok(ammo)
     }
-    pub fn decode_vector_noscale(&mut self) -> Result<[f32; 3], DemoParserError> {
+
+    fn decode_vector_noscale(&mut self) -> Result<[f32; 3], DemoParserError> {
         let mut v = [0.0; 3];
-        for idx in 0..3 {
-            v[idx] = self.decode_noscale()?;
+        for idx in &mut v {
+            *idx = self.decode_noscale()?;
         }
         Ok(v)
     }
-    pub fn decode_uint64(&mut self) -> Result<u64, DemoParserError> {
+
+    fn decode_uint64(&mut self) -> Result<u64, DemoParserError> {
         let bytes = self.read_n_bytes(8)?;
-        match bytes.try_into() {
-            Err(_) => Err(DemoParserError::OutOfBytesError),
-            Ok(arr) => Ok(u64::from_ne_bytes(arr)),
-        }
+        bytes.try_into()
+            .map_err(|_| DemoParserError::OutOfBytesError)
+            .map(u64::from_ne_bytes)
     }
-    pub fn decode_noscale(&mut self) -> Result<f32, DemoParserError> {
-        Ok(f32::from_le_bytes(self.read_nbits(32)?.to_le_bytes()))
+
+    fn decode_noscale(&mut self) -> Result<f32, DemoParserError> {
+        Ok(f32::from_bits(self.read_nbits(32)?))
     }
+
     pub fn read_string(&mut self) -> Result<String, DemoParserError> {
         let mut s: Vec<u8> = vec![];
         loop {
@@ -132,22 +143,27 @@ impl<'a> Bitreader<'a> {
         }
         Ok(String::from_utf8_lossy(&s).to_string())
     }
-    pub fn decode_float_coord(&mut self) -> Result<f32, DemoParserError> {
-        Ok(self.read_bit_coord())?
+
+    fn decode_float_coord(&mut self) -> Result<f32, DemoParserError> {
+        self.read_bit_coord()
     }
-    pub fn decode_simul_time(&mut self) -> Result<f32, DemoParserError> {
+
+    fn decode_simul_time(&mut self) -> Result<f32, DemoParserError> {
         Ok(self.read_varint()? as f32 * (1.0 / 30.0))
     }
-    pub fn decode_normal(&mut self) -> Result<f32, DemoParserError> {
+
+    fn decode_normal(&mut self) -> Result<f32, DemoParserError> {
         let is_neg = self.read_boolean()?;
-        let len = self.read_nbits(11)?;
-        let result = (len as f64 * (1.0 / ((1 << 11) as f64) - 1.0)) as f32;
-        match is_neg {
-            true => Ok(-result),
-            false => Ok(result),
+        let len = self.read_nbits(11)? as f64;
+        let result = (len * (1.0 / ((1 << 11) as f64) - 1.0)) as f32;
+        if is_neg {
+            Ok(-result)
+        } else {
+            Ok(result)
         }
     }
-    pub fn decode_normal_vec(&mut self) -> Result<[f32; 3], DemoParserError> {
+
+    fn decode_normal_vec(&mut self) -> Result<[f32; 3], DemoParserError> {
         let mut v = [0.0; 3];
         let has_x = self.read_boolean()?;
         let has_y = self.read_boolean()?;
@@ -160,7 +176,7 @@ impl<'a> Bitreader<'a> {
         let neg_z = self.read_boolean()?;
         let prod_sum = v[0] * v[0] + v[1] * v[1];
         if prod_sum < 1.0 {
-            v[2] = (1.0 - prod_sum).sqrt() as f32;
+            v[2] = (1.0 - prod_sum).sqrt();
         } else {
             v[2] = 0.0;
         }
@@ -169,14 +185,16 @@ impl<'a> Bitreader<'a> {
         }
         Ok(v)
     }
-    pub fn decode_qangle_pitch_yaw(&mut self) -> Result<[f32; 3], DemoParserError> {
+
+    fn decode_qangle_pitch_yaw(&mut self) -> Result<[f32; 3], DemoParserError> {
         let mut v = [0.0; 3];
         v[0] = self.read_angle(32)?;
         v[1] = self.read_angle(32)?;
         v[2] = self.read_angle(32)?;
         Ok(v)
     }
-    pub fn decode_qangle_all_3(&mut self) -> Result<[f32; 3], DemoParserError> {
+
+    fn decode_qangle_all_3(&mut self) -> Result<[f32; 3], DemoParserError> {
         // Used by aimpunch props (not exposed atm) maybe wrong format? correct number of bits anyhow.
         let mut v = [0.0; 3];
         v[0] = self.decode_noscale()?;
@@ -184,7 +202,8 @@ impl<'a> Bitreader<'a> {
         v[2] = self.decode_noscale()?;
         Ok(v)
     }
-    pub fn decode_qangle_variant(&mut self) -> Result<[f32; 3], DemoParserError> {
+
+    fn decode_qangle_variant(&mut self) -> Result<[f32; 3], DemoParserError> {
         let mut v = [0.0; 3];
         let has_x = self.read_boolean()?;
         let has_y = self.read_boolean()?;
@@ -200,8 +219,9 @@ impl<'a> Bitreader<'a> {
         }
         Ok(v)
     }
-    pub fn read_angle(&mut self, n: usize) -> Result<f32, DemoParserError> {
-        return Ok(self.decode_noscale()? / ((1 << n) as f32));
+
+    fn read_angle(&mut self, n: usize) -> Result<f32, DemoParserError> {
+        Ok(self.decode_noscale()? / ((1 << n) as f32))
     }
 }
 
@@ -247,39 +267,38 @@ impl QuantalizedFloat {
             self.flags &= !(QFF_ROUNDUP | QFF_ROUNDDOWN | QFF_ENCODE_ZERO);
         }
     }
-    fn assign_multipliers(&mut self, steps: u32) {
+
+    fn assign_multipliers(&mut self, steps: f32) {
         self.high_low_mul = 0.0;
         let range = self.high - self.low;
 
-        let high: u32;
-        if self.bit_count == 32 {
-            high = 0xFFFFFFFE;
+        let high = if self.bit_count == 32 {
+            0xFFFFFFFE_u32 as f32
         } else {
-            high = (1 << self.bit_count) - 1;
-        }
+            ((1 << self.bit_count) - 1) as f32
+        };
 
-        let mut high_mul: f32;
+        let mut high_mul = high;
         // Xd?
-        if range.abs() <= 0.0 {
-            high_mul = high as f32;
-        } else {
-            high_mul = (high as f32) / range;
+        if range.abs() > 0.0 {
+            high_mul /= range;
         }
 
-        if (high_mul * range > (high as f32)) || (((high_mul * range) as f64) > ((high as f32) as f64)) {
+        if (high_mul * range > high) || (((high_mul * range) as f64) > (high as f64)) {
             let multipliers = vec![0.9999, 0.99, 0.9, 0.8, 0.7];
             for multiplier in multipliers {
-                high_mul = (high as f32) / range * multiplier;
-                if (high_mul * range > (high as f32)) || (((high_mul * range) as f64) > (high as f32) as f64) {
+                high_mul = high / range * multiplier;
+                if (high_mul * range > high) || (((high_mul * range) as f64) > high as f64) {
                     continue;
                 }
                 break;
             }
         }
         self.high_low_mul = high_mul;
-        self.dec_mul = 1.0 / (steps - 1) as f32;
+        self.dec_mul = 1.0 / (steps - 1.0);
     }
-    pub fn quantize(&mut self, val: f32) -> f32 {
+
+    fn quantize(&mut self, val: f32) -> f32 {
         if val < self.low {
             return self.low;
         } else if val > self.high {
@@ -288,7 +307,8 @@ impl QuantalizedFloat {
         let i = ((val - self.low) * self.high_low_mul) as u32;
         self.low + (self.high - self.low) * ((i as f32) * self.dec_mul)
     }
-    pub fn decode(&self, bitreader: &mut Bitreader) -> Result<f32, DemoParserError> {
+
+    fn decode(&self, bitreader: &mut Bitreader) -> Result<f32, DemoParserError> {
         if self.flags & QFF_ROUNDDOWN != 0 && bitreader.read_boolean()? {
             return Ok(self.low);
         }
@@ -301,10 +321,11 @@ impl QuantalizedFloat {
         let bits = bitreader.read_nbits(self.bit_count)?;
         Ok(self.low + (self.high - self.low) * bits as f32 * self.dec_mul)
     }
+
     pub fn new(bitcount: u32, flags: Option<i32>, low_value: Option<f32>, high_value: Option<f32>) -> Self {
         let mut qf = QuantalizedFloat {
             no_scale: false,
-            bit_count: 0,
+            bit_count: bitcount,
             dec_mul: 0.0,
             low: 0.0,
             high: 0.0,
@@ -317,39 +338,24 @@ impl QuantalizedFloat {
             qf.no_scale = true;
             qf.bit_count = 32;
             return qf;
-        } else {
-            qf.no_scale = false;
-            qf.bit_count = bitcount;
-            qf.offset = 0.0;
+        }
 
-            if low_value.is_some() {
-                qf.low = low_value.unwrap_or(0.0);
-            } else {
-                qf.low = 0.0;
-            }
-            if high_value.is_some() {
-                qf.high = high_value.unwrap_or(0.0);
-            } else {
-                qf.high = 1.0;
-            }
-        }
-        if flags.is_some() {
-            qf.flags = flags.unwrap_or(0) as u32;
-        } else {
-            qf.flags = 0;
-        }
+        qf.low = low_value.unwrap_or(0.0);
+        qf.high = high_value.unwrap_or(1.0);
+        qf.flags = flags.unwrap_or(0) as u32;
         qf.validate_flags();
-        let mut steps = 1 << qf.bit_count;
 
+        let mut steps = (1 << qf.bit_count) as f32;
         if (qf.flags & QFF_ROUNDDOWN) != 0 {
             let range = qf.high - qf.low;
-            qf.offset = range / (steps as f32);
+            qf.offset = range / steps;
             qf.high -= qf.offset;
         } else if (qf.flags & QFF_ROUNDUP) != 0 {
             let range = qf.high - qf.low;
-            qf.offset = range / (steps as f32);
+            qf.offset = range / steps;
             qf.low += qf.offset;
         }
+
         if (qf.flags & QFF_ENCODE_INTEGERS) != 0 {
             let mut delta = qf.high - qf.low;
             if delta < 1.0 {
@@ -367,34 +373,35 @@ impl QuantalizedFloat {
             }
             if bit_count > qf.bit_count {
                 qf.bit_count = bit_count;
-                steps = 1 << qf.bit_count;
+                steps = (1 << qf.bit_count) as f32;
             }
-            qf.offset = range_2 as f32 / steps as f32;
-            qf.high = qf.low + ((range_2 as f32 - qf.offset) as f32);
+            qf.offset = range_2 as f32 / steps;
+            qf.high = qf.low + (range_2 as f32 - qf.offset);
         }
 
         qf.assign_multipliers(steps);
 
-        if (qf.flags & QFF_ROUNDDOWN) != 0 {
-            if qf.quantize(qf.low) == qf.low {
-                qf.flags &= !QFF_ROUNDDOWN;
-            }
+        if (qf.flags & QFF_ROUNDDOWN) != 0 && qf.quantize(qf.low) == qf.low {
+            qf.flags &= !QFF_ROUNDDOWN;
         }
-        if (qf.flags & QFF_ROUNDUP) != 0 {
-            if qf.quantize(qf.high) == qf.high {
-                qf.flags &= !QFF_ROUNDUP
-            }
+        if (qf.flags & QFF_ROUNDUP) != 0 && qf.quantize(qf.high) == qf.high {
+            qf.flags &= !QFF_ROUNDUP
         }
-        if (qf.flags & QFF_ENCODE_ZERO) != 0 {
-            if qf.quantize(0.0) == 0.0 {
-                qf.flags &= !QFF_ENCODE_ZERO;
-            }
+        if (qf.flags & QFF_ENCODE_ZERO) != 0 && qf.quantize(0.0) == 0.0 {
+            qf.flags &= !QFF_ENCODE_ZERO;
         }
 
         qf
     }
 }
 
+impl fmt::Display for Decoder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[allow(clippy::excessive_precision)]
 #[cfg(test)]
 mod tests {
     use crate::second_pass::decoder::*;
@@ -905,11 +912,5 @@ mod tests {
             no_scale: false,
         };
         assert_eq!(qf, correct);
-    }
-}
-
-impl fmt::Display for Decoder {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
     }
 }

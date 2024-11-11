@@ -1,12 +1,5 @@
-use crate::first_pass::prop_controller::PropInfo;
-use crate::parse_demo::DemoOutput;
-use crate::second_pass::collect_data::ProjectileRecord;
-use crate::second_pass::parser_settings::{EconItem, PlayerEndMetaData};
-use ahash::AHashMap;
-use std::collections::HashMap;
 use itertools::Itertools;
 use memmap2::Mmap;
-use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,8 +12,8 @@ pub enum Variant {
     U64(u64),
     U8(u8),
     String(String),
-    VecXY([f32; 2]),
-    VecXYZ([f32; 3]),
+    XYVec([f32; 2]),
+    XYZVec([f32; 3]),
     // Todo change to Vec<T>
     StringVec(Vec<String>),
     U32Vec(Vec<u32>),
@@ -28,6 +21,7 @@ pub enum Variant {
     Stickers(Vec<Sticker>),
     InputHistory(Vec<InputHistory>),
 }
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Sticker {
     pub name: String,
@@ -36,11 +30,12 @@ pub struct Sticker {
     pub x: f32,
     pub y: f32,
 }
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InputHistory {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+    pub z: Option<f32>,
     pub render_tick_count: i32,
     pub render_tick_fraction: f32,
     pub player_tick_count: i32,
@@ -76,8 +71,8 @@ impl VarVec {
             Variant::StringVec(_) => VarVec::StringVec(vec![]),
             Variant::U64Vec(_) => VarVec::U64Vec(vec![]),
             Variant::U32Vec(_) => VarVec::U32Vec(vec![]),
-            Variant::VecXY(_) => VarVec::XYVec(vec![]),
-            Variant::VecXYZ(_) => VarVec::XYZVec(vec![]),
+            Variant::XYVec(_) => VarVec::XYVec(vec![]),
+            Variant::XYZVec(_) => VarVec::XYZVec(vec![]),
             Variant::Stickers(_) => VarVec::Stickers(vec![]),
             Variant::I16(_) => VarVec::I32(vec![]),
             Variant::U8(_) => VarVec::I32(vec![]),
@@ -86,19 +81,13 @@ impl VarVec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct PropColumn {
     pub data: Option<VarVec>,
     pub num_nones: usize,
 }
 
 impl PropColumn {
-    pub fn new() -> Self {
-        PropColumn {
-            data: None,
-            num_nones: 0,
-        }
-    }
     pub fn slice_to_new(&self, indicies: &[usize]) -> Option<PropColumn> {
         let data = match &self.data {
             Some(VarVec::Bool(b)) => VarVec::Bool(indicies.iter().map(|x| b[*x]).collect_vec()),
@@ -126,6 +115,8 @@ impl PropColumn {
             num_nones: 0,
         })
     }
+
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         match &self.data {
             Some(VarVec::Bool(b)) => b.len(),
@@ -144,272 +135,75 @@ impl PropColumn {
             None => self.num_nones,
         }
     }
+
     pub fn extend_from(&mut self, other: &mut PropColumn) {
-        match &mut self.data {
-            Some(VarVec::Bool(v)) => match &other.data {
-                Some(VarVec::Bool(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::I32(v)) => match &other.data {
-                Some(VarVec::I32(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::F32(v)) => match &other.data {
-                Some(VarVec::F32(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::String(v)) => match &other.data {
-                Some(VarVec::String(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::U32(v)) => match &other.data {
-                Some(VarVec::U32(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::U64(v)) => match &other.data {
-                Some(VarVec::U64(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::StringVec(v)) => match &other.data {
-                Some(VarVec::StringVec(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(vec![]);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::U64Vec(v)) => match &other.data {
-                Some(VarVec::U64Vec(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(vec![]);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::XYVec(v)) => match &other.data {
-                Some(VarVec::XYVec(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::XYZVec(v)) => match &other.data {
-                Some(VarVec::XYZVec(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(None);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::Stickers(v)) => match &other.data {
-                Some(VarVec::Stickers(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(vec![]);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::InputHistory(v)) => match &other.data {
-                Some(VarVec::InputHistory(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(vec![]);
-                    }
-                }
-                _ => {}
-            },
-            Some(VarVec::U32Vec(v)) => match &other.data {
-                Some(VarVec::U32Vec(v_other)) => {
-                    v.extend_from_slice(&v_other);
-                }
-                None => {
-                    for _ in 0..other.num_nones {
-                        v.push(vec![]);
-                    }
-                }
-                _ => {}
-            },
-            None => match &other.data {
-                Some(VarVec::Bool(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::I32(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::U32(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::U64(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::String(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::F32(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::StringVec(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::U64Vec(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::XYVec(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::XYZVec(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::Stickers(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::U32Vec(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                Some(VarVec::InputHistory(_inner)) => {
-                    self.resolve_vec_type(PropColumn::get_type(&other.data));
-                    self.extend_from(other);
-                }
-                None => {
-                    self.num_nones += other.num_nones;
-                }
-            },
+        if self.data.is_none() {
+            if let Some(other_data) = &other.data {
+                self.resolve_vec_type(other_data);
+            } else {
+                self.num_nones += other.num_nones;
+                return;
+            }
+        }
+        let Some(data) = &mut self.data else { return };
+
+        if let Some(other_data) = &other.data {
+            match (data, other_data) {
+                (VarVec::Bool(v), VarVec::Bool(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::I32(v), VarVec::I32(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::F32(v), VarVec::F32(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::String(v), VarVec::String(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::U32(v), VarVec::U32(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::U64(v), VarVec::U64(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::StringVec(v), VarVec::StringVec(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::U64Vec(v), VarVec::U64Vec(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::XYVec(v), VarVec::XYVec(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::XYZVec(v), VarVec::XYZVec(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::Stickers(v), VarVec::Stickers(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::InputHistory(v), VarVec::InputHistory(v_other)) => v.extend_from_slice(v_other),
+                (VarVec::U32Vec(v), VarVec::U32Vec(v_other)) => v.extend_from_slice(v_other),
+                (_, _) => {}
+            }
+        } else {
+            data.push_n_nones(other.num_nones);
         }
     }
 
-    pub fn get_type(v: &Option<VarVec>) -> Option<u32> {
-        match v {
-            Some(VarVec::Bool(_)) => Some(0),
-            Some(VarVec::F32(_)) => Some(1),
-            Some(VarVec::I32(_)) => Some(2),
-            Some(VarVec::String(_)) => Some(3),
-            Some(VarVec::U32(_)) => Some(4),
-            Some(VarVec::U64(_)) => Some(5),
-            Some(VarVec::StringVec(_)) => Some(6),
-            Some(VarVec::U64Vec(_)) => Some(7),
-            Some(VarVec::XYVec(_)) => Some(8),
-            Some(VarVec::XYZVec(_)) => Some(9),
-            Some(VarVec::Stickers(_)) => Some(10),
-            Some(VarVec::U32Vec(_)) => Some(11),
-            Some(VarVec::InputHistory(_)) => Some(12),
+    fn resolve_vec_type(&mut self, v: &VarVec) {
+        let mut data = match v {
+            VarVec::Bool(_) => VarVec::Bool(vec![]),
+            VarVec::F32(_) => VarVec::F32(vec![]),
+            VarVec::I32(_) => VarVec::I32(vec![]),
+            VarVec::String(_) => VarVec::String(vec![]),
+            VarVec::U32(_) => VarVec::U32(vec![]),
+            VarVec::U64(_) => VarVec::U64(vec![]),
+            VarVec::StringVec(_) => VarVec::StringVec(vec![]),
+            VarVec::U64Vec(_) => VarVec::U64Vec(vec![]),
+            VarVec::XYVec(_) => VarVec::XYVec(vec![]),
+            VarVec::XYZVec(_) => VarVec::XYZVec(vec![]),
+            VarVec::Stickers(_) => VarVec::Stickers(vec![]),
+            VarVec::U32Vec(_) => VarVec::U32Vec(vec![]),
+            VarVec::InputHistory(_) => VarVec::InputHistory(vec![]),
+        };
+        data.push_n_nones(self.num_nones);
+        self.data = Some(data);
+    }
 
-            None => None,
-        }
-    }
-    pub fn resolve_vec_type(&mut self, v_type: Option<u32>) {
-        if self.data.is_some() {
-            return;
-        }
-        match v_type {
-            Some(0) => self.data = Some(VarVec::Bool(vec![])),
-            Some(1) => self.data = Some(VarVec::F32(vec![])),
-            Some(2) => self.data = Some(VarVec::I32(vec![])),
-            Some(3) => self.data = Some(VarVec::String(vec![])),
-            Some(4) => self.data = Some(VarVec::U32(vec![])),
-            Some(5) => self.data = Some(VarVec::U64(vec![])),
-            Some(6) => self.data = Some(VarVec::StringVec(vec![])),
-            Some(7) => self.data = Some(VarVec::U64Vec(vec![])),
-            Some(8) => self.data = Some(VarVec::XYVec(vec![])),
-            Some(9) => self.data = Some(VarVec::XYZVec(vec![])),
-            Some(10) => self.data = Some(VarVec::Stickers(vec![])),
-            Some(11) => self.data = Some(VarVec::U32Vec(vec![])),
-            Some(12) => self.data = Some(VarVec::InputHistory(vec![])),
-            _ => {}
-        }
-        for _ in 0..self.num_nones {
-            self.push(None);
-        }
-    }
     #[inline(always)]
     pub fn push(&mut self, item: Option<Variant>) {
-        match &self.data {
-            Some(_) => {}
-            None => match &item {
+        if self.data.is_none() {
+            match &item {
                 None => self.num_nones += 1,
                 Some(p) => {
-                    let mut var_vec = VarVec::new(&p);
-                    for _ in 0..self.num_nones {
-                        var_vec.push_variant(None);
-                    }
+                    let mut var_vec = VarVec::new(p);
+                    var_vec.push_n_nones(self.num_nones);
                     self.num_nones = 0;
                     self.data = Some(var_vec);
                 }
-            },
-        };
-        if let Some(v) = &mut self.data {
-            v.push_variant(item.clone());
+            }
+        }
+        if let Some(var_vec) = &mut self.data {
+            var_vec.push_variant(item);
         }
     }
 }
@@ -417,81 +211,46 @@ impl PropColumn {
 impl VarVec {
     #[inline(always)]
     pub fn push_variant(&mut self, item: Option<Variant>) {
-        match item {
-            Some(Variant::F32(p)) => match self {
-                VarVec::F32(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::I32(p)) => match self {
-                VarVec::I32(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::String(p)) => match self {
-                VarVec::String(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::U32(p)) => match self {
-                VarVec::U32(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::U64(p)) => match self {
-                VarVec::U64(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::Bool(p)) => match self {
-                VarVec::Bool(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::StringVec(p)) => match self {
-                VarVec::StringVec(f) => f.push(p),
-                _ => {}
-            },
-            Some(Variant::U64Vec(p)) => match self {
-                VarVec::U64Vec(f) => f.push(p),
-                _ => {}
-            },
-            Some(Variant::U32Vec(p)) => match self {
-                VarVec::U32Vec(f) => f.push(p),
-                _ => {}
-            },
-            Some(Variant::VecXY(p)) => match self {
-                VarVec::XYVec(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::VecXYZ(p)) => match self {
-                VarVec::XYZVec(f) => f.push(Some(p)),
-                _ => {}
-            },
-            Some(Variant::Stickers(p)) => match self {
-                VarVec::Stickers(f) => f.push(p),
-                _ => {}
-            },
-            Some(Variant::InputHistory(p)) => match self {
-                VarVec::InputHistory(f) => f.push(p),
-                _ => {}
-            },
-            None => self.push_none(),
+        if item.is_none() {
+            return self.push_n_nones(1);
+        }
+        match (item, self) {
+            (Some(Variant::F32(p)), VarVec::F32(f)) => f.push(Some(p)),
+            (Some(Variant::I32(p)), VarVec::I32(f)) => f.push(Some(p)),
+            (Some(Variant::String(p)), VarVec::String(f)) => f.push(Some(p)),
+            (Some(Variant::U32(p)), VarVec::U32(f)) => f.push(Some(p)),
+            (Some(Variant::U64(p)), VarVec::U64(f)) => f.push(Some(p)),
+            (Some(Variant::Bool(p)), VarVec::Bool(f)) => f.push(Some(p)),
+            (Some(Variant::StringVec(p)), VarVec::StringVec(f)) => f.push(p),
+            (Some(Variant::U64Vec(p)), VarVec::U64Vec(f)) => f.push(p),
+            (Some(Variant::U32Vec(p)), VarVec::U32Vec(f)) => f.push(p),
+            (Some(Variant::XYVec(p)), VarVec::XYVec(f)) => f.push(Some(p)),
+            (Some(Variant::XYZVec(p)), VarVec::XYZVec(f)) => f.push(Some(p)),
+            (Some(Variant::Stickers(p)), VarVec::Stickers(f)) => f.push(p),
+            (Some(Variant::InputHistory(p)), VarVec::InputHistory(f)) => f.push(p),
             _ => {}
         }
     }
-    pub fn push_none(&mut self) {
+
+    fn push_n_nones(&mut self, count: usize) {
         match self {
-            VarVec::I32(f) => f.push(None),
-            VarVec::F32(f) => f.push(None),
-            VarVec::String(f) => f.push(None),
-            VarVec::U32(f) => f.push(None),
-            VarVec::U64(f) => f.push(None),
-            VarVec::Bool(f) => f.push(None),
-            VarVec::StringVec(f) => f.push(vec![]),
-            VarVec::U64Vec(f) => f.push(vec![]),
-            VarVec::XYVec(f) => f.push(None),
-            VarVec::XYZVec(f) => f.push(None),
-            VarVec::U32Vec(f) => f.push(vec![]),
-            VarVec::Stickers(f) => f.push(vec![]),
-            VarVec::InputHistory(f) => f.push(vec![]),
+            VarVec::I32(f) => f.resize(f.len() + count, None),
+            VarVec::F32(f) => f.resize(f.len() + count, None),
+            VarVec::String(f) => f.resize(f.len() + count, None),
+            VarVec::U32(f) => f.resize(f.len() + count, None),
+            VarVec::U64(f) => f.resize(f.len() + count, None),
+            VarVec::Bool(f) => f.resize(f.len() + count, None),
+            VarVec::StringVec(f) => f.resize(f.len() + count, vec![]),
+            VarVec::U64Vec(f) => f.resize(f.len() + count, vec![]),
+            VarVec::XYVec(f) => f.resize(f.len() + count, None),
+            VarVec::XYZVec(f) => f.resize(f.len() + count, None),
+            VarVec::U32Vec(f) => f.resize(f.len() + count, vec![]),
+            VarVec::Stickers(f) => f.resize(f.len() + count, vec![]),
+            VarVec::InputHistory(f) => f.resize(f.len() + count, vec![]),
         }
     }
 }
+
 #[allow(dead_code)]
 pub fn filter_to_vec<Wanted>(v: impl IntoIterator<Item = impl TryInto<Wanted>>) -> Vec<Wanted> {
     v.into_iter().filter_map(|x| x.try_into().ok()).collect()
@@ -511,125 +270,17 @@ impl Serialize for Variant {
             Variant::U32(u) => serializer.serialize_u32(*u),
             Variant::U64(u) => serializer.serialize_str(&u.to_string()),
             Variant::U8(u) => serializer.serialize_u8(*u),
-            Variant::StringVec(v) => {
-                let mut s = serializer.serialize_seq(Some(v.len()))?;
-                for item in v {
-                    s.serialize_element(item)?;
-                }
-                s.end()
-            }
-            Variant::VecXY(v) => {
-                let mut s = serializer.serialize_seq(Some(v.len()))?;
-                for item in v {
-                    s.serialize_element(item)?;
-                }
-                s.end()
-            }
-            Variant::VecXYZ(v) => {
-                let mut s = serializer.serialize_seq(Some(v.len()))?;
-                for item in v {
-                    s.serialize_element(item)?;
-                }
-                s.end()
-            }
-            Variant::U32Vec(v) => {
-                let mut s = serializer.serialize_seq(Some(v.len()))?;
-                for item in v {
-                    s.serialize_element(item)?;
-                }
-                s.end()
-            }
-            Variant::U64Vec(v) => {
-                let mut s = serializer.serialize_seq(Some(v.len()))?;
-                for item in v {
-                    s.serialize_element(&item.to_string())?;
-                }
-                s.end()
-            }
-            Variant::Stickers(v) => {
-                let mut s = serializer.serialize_seq(Some(v.len()))?;
-                for item in v {
-                    s.serialize_element(&item)?;
-                }
-                s.end()
-            }
-            Variant::InputHistory(v) => {
-                let mut s = serializer.serialize_seq(Some(v.len()))?;
-                for item in v {
-                    s.serialize_element(&item)?;
-                }
-                s.end()
-            }
+            Variant::StringVec(v) => serializer.collect_seq(v),
+            Variant::XYVec(v) => serializer.collect_seq(v),
+            Variant::XYZVec(v) => serializer.collect_seq(v),
+            Variant::U32Vec(v) => serializer.collect_seq(v),
+            Variant::U64Vec(v) => serializer.collect_seq(v),
+            Variant::Stickers(v) => serializer.collect_seq(v),
+            Variant::InputHistory(v) => serializer.collect_seq(v)
         }
     }
 }
 
-impl Serialize for PlayerEndMetaData {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("PlayerEndMetaData", 3)?;
-        state.serialize_field("name", &self.name)?;
-        let steamid = match self.steamid {
-            Some(u) => Some(u.to_string()),
-            None => None,
-        };
-        state.serialize_field("steamid", &steamid)?;
-        state.serialize_field("team_number", &self.team_number)?;
-        state.end()
-    }
-}
-impl Serialize for EconItem {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("EconItem", 14)?;
-        let steamid = match self.steamid {
-            Some(u) => Some(u.to_string()),
-            None => None,
-        };
-        state.serialize_field("steamid", &steamid)?;
-        state.serialize_field("account_id", &self.account_id)?;
-        state.serialize_field("custom_name", &self.custom_name)?;
-        state.serialize_field("def_index", &self.def_index)?;
-        state.serialize_field("dropreason", &self.dropreason)?;
-        state.serialize_field("item_id", &self.item_id)?;
-        state.serialize_field("inventory", &self.inventory)?;
-        state.serialize_field("item_id", &self.item_id)?;
-        state.serialize_field("paint_index", &self.paint_index)?;
-        state.serialize_field("paint_seed", &self.paint_seed)?;
-        state.serialize_field("paint_wear", &self.paint_wear)?;
-        state.serialize_field("quality", &self.quality)?;
-        state.serialize_field("quest_id", &self.quest_id)?;
-        state.serialize_field("rarity", &self.rarity)?;
-        state.serialize_field("item_name", &self.item_name)?;
-        state.serialize_field("skin_name", &self.skin_name)?;
-        state.end()
-    }
-}
-impl Serialize for ProjectileRecord {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("ProjectileRecord", 7)?;
-        let steamid = match self.steamid {
-            Some(u) => Some(u.to_string()),
-            None => None,
-        };
-        state.serialize_field("steamid", &steamid)?;
-        state.serialize_field("grenade_type", &self.grenade_type)?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("tick", &self.tick)?;
-        state.serialize_field("x", &self.x)?;
-        state.serialize_field("y", &self.y)?;
-        state.serialize_field("z", &self.z)?;
-        state.serialize_field("entity_id", &self.entity_id)?;
-        state.end()
-    }
-}
 #[derive(Debug)]
 pub enum BytesVariant {
     Mmap(Mmap),
@@ -641,6 +292,7 @@ where
     Idx: std::slice::SliceIndex<[u8]>,
 {
     type Output = Idx::Output;
+
     #[inline(always)]
     fn index(&self, i: Idx) -> &Self::Output {
         match self {
@@ -662,189 +314,5 @@ impl BytesVariant {
             Self::Mmap(m) => m.len(),
             Self::Vec(v) => v.len(),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct OutputSerdeHelperStruct {
-    pub prop_infos: Vec<PropInfo>,
-    pub inner: AHashMap<u32, PropColumn>,
-}
-
-#[derive(Serialize)]
-pub enum SerdeOutput {
-    PerPlayer(HashMap<u64, OutputSerdeHelperStruct>),
-    StructOfArrays(OutputSerdeHelperStruct),
-    ArrayOfStructs(Vec<HashMap<String, Option<Variant>>>),
-}
-
-pub fn to_serde_output(demo_output: DemoOutput, order_by_steamid: bool, struct_of_arrays: bool) -> SerdeOutput {
-    let mut prop_infos = demo_output.prop_controller.prop_infos;
-    prop_infos.sort_by_key(|x| x.prop_name.clone());
-
-    if order_by_steamid {
-        let mut per_player_hashmap = HashMap::with_capacity(demo_output.df_per_player.len());
-        for (player_id, value) in demo_output.df_per_player {
-            let helper = OutputSerdeHelperStruct {
-                prop_infos: prop_infos.clone(),
-                inner: value,
-            };
-            per_player_hashmap.insert(player_id, helper);
-        }
-        SerdeOutput::PerPlayer(per_player_hashmap)
-    } else {
-        let helper = OutputSerdeHelperStruct {
-            prop_infos,
-            inner: demo_output.df,
-        };
-
-        if struct_of_arrays {
-            SerdeOutput::StructOfArrays(helper)
-        } else {
-            SerdeOutput::ArrayOfStructs(soa_to_aos(helper))
-        }
-    }
-}
-
-pub fn soa_to_aos(soa: OutputSerdeHelperStruct) -> Vec<HashMap<String, Option<Variant>>> {
-    let mut total_rows = 0;
-    for (_, v) in &soa.inner {
-        total_rows = v.len();
-    }
-    let mut v = Vec::with_capacity(total_rows);
-    for idx in 0..total_rows {
-        let mut hm: HashMap<String, Option<Variant>> = HashMap::with_capacity(soa.prop_infos.len());
-        for prop_info in &soa.prop_infos {
-            if soa.inner.contains_key(&prop_info.id) {
-                match &soa.inner[&prop_info.id].data {
-                    None => continue,
-                    Some(VarVec::F32(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::F32(*f))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::I32(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::I32(*f))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::String(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::String(f.to_string()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::U64(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::String(f.to_string()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::Bool(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::Bool(*f))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::U32(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::U32(*f))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::StringVec(val)) => match val.get(idx) {
-                        Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::StringVec(f.clone()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::U64Vec(val)) => match val.get(idx) {
-                        Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::U64Vec(f.clone()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::U32Vec(val)) => match val.get(idx) {
-                        Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::U32Vec(f.clone()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::XYVec(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::VecXY(f.clone()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::XYZVec(val)) => match val.get(idx) {
-                        Some(Some(f)) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::VecXYZ(f.clone()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::Stickers(val)) => match val.get(idx) {
-                        Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::Stickers(f.clone()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                    Some(VarVec::InputHistory(val)) => match val.get(idx) {
-                        Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::InputHistory(f.clone()))),
-                        _ => hm.insert(prop_info.prop_friendly_name.clone(), None),
-                    },
-                };
-            }
-        }
-        v.push(hm);
-    }
-    v
-}
-
-impl Serialize for OutputSerdeHelperStruct {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut map = serializer.serialize_map(Some(self.prop_infos.len()))?;
-
-        for prop_info in &self.prop_infos {
-            if self.inner.contains_key(&prop_info.id) {
-                match &self.inner[&prop_info.id].data {
-                    None => {}
-                    Some(VarVec::F32(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::I32(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::String(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::U64(val)) => {
-                        let as_str: Vec<Option<String>> = val
-                            .iter()
-                            .map(|x| match x {
-                                Some(u) => Some(u.to_string()),
-                                None => None,
-                            })
-                            .collect_vec();
-                        map.serialize_entry(&prop_info.prop_friendly_name, &as_str)?;
-                    }
-                    Some(VarVec::Bool(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::U32(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::StringVec(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::U32Vec(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::XYVec(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::XYZVec(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::Stickers(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::InputHistory(val)) => {
-                        map.serialize_entry(&prop_info.prop_friendly_name, val)?;
-                    }
-                    Some(VarVec::U64Vec(val)) => {
-                        let string_sid = val
-                            .iter()
-                            .map(|v| {
-                                let as_sid = v.iter().map(|s| s.to_string()).collect_vec();
-                                as_sid
-                            })
-                            .collect_vec();
-                        map.serialize_entry(&prop_info.prop_friendly_name, &string_sid)?;
-                    }
-                }
-            }
-        }
-        map.end()
     }
 }

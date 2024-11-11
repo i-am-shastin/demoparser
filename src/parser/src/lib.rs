@@ -5,3 +5,5 @@ pub mod maps;
 pub mod parse_demo;
 pub mod second_pass;
 pub mod exports;
+pub mod definitions;
+pub mod serde_helper;

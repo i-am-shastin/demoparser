@@ -7,8 +7,9 @@ use napi::Either;
 use napi::JsBigInt;
 use napi::JsUnknown;
 use parser::exports;
+use parser::parse_demo::ParsingMode;
 use parser::second_pass::parser_settings::create_huffman_lookup_table;
-use parser::second_pass::variants::to_serde_output;
+use parser::serde_helper::to_serde_output;
 use parser::second_pass::variants::BytesVariant;
 use parser::second_pass::variants::Variant;
 use serde_json::Value;
@@ -97,7 +98,7 @@ where
 pub fn parse_voice(path_or_buf: Either<String, Buffer>) -> napi::Result<HashMap<String, Vec<u8>>> {
     let bytes = resolve_byte_type(path_or_buf)?;
 
-    let voice_data_wav = exports::parse_voice(&bytes, parser::parse_demo::ParsingMode::Normal).map_err(to_napi_err)?;
+    let voice_data_wav = exports::parse_voice(&bytes, ParsingMode::Normal).map_err(to_napi_err)?;
     Ok(HashMap::from_iter(voice_data_wav))
 }
 
@@ -106,7 +107,7 @@ pub fn list_game_events(path_or_buf: Either<String, Buffer>) -> napi::Result<Val
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();
 
-    let game_events = exports::list_game_events(&bytes, &huf, parser::parse_demo::ParsingMode::Normal).map_err(to_napi_err)?;
+    let game_events = exports::list_game_events(&bytes, &huf, ParsingMode::Normal).map_err(to_napi_err)?;
     serde_json::to_value(game_events).map_err(to_napi_err)
 }
 
@@ -115,7 +116,7 @@ pub fn parse_grenades(path_or_buf: Either<String, Buffer>) -> napi::Result<Value
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();
     
-    let projectiles = exports::parse_grenades(&bytes, &huf, parser::parse_demo::ParsingMode::Normal).map_err(to_napi_err)?;
+    let projectiles = exports::parse_grenades(&bytes, &huf, ParsingMode::Normal).map_err(to_napi_err)?;
     serde_json::to_value(&projectiles).map_err(to_napi_err)
 }
 
@@ -124,7 +125,7 @@ pub fn parse_header(path_or_buf: Either<String, Buffer>) -> napi::Result<Value> 
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();
 
-    let header = exports::parse_header(&bytes, &huf, parser::parse_demo::ParsingMode::Normal).map_err(to_napi_err)?;
+    let header = exports::parse_header(&bytes, &huf, ParsingMode::Normal).map_err(to_napi_err)?;
     serde_json::to_value(&header).map_err(to_napi_err)
 }
 
@@ -138,7 +139,7 @@ pub fn parse_event(
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();
     
-    let game_events = exports::parse_event(&bytes, &huf, parser::parse_demo::ParsingMode::Normal, event_name, player_props, other_props).map_err(to_napi_err)?;
+    let game_events = exports::parse_event(&bytes, &huf, ParsingMode::Normal, event_name, player_props, other_props).map_err(to_napi_err)?;
     serde_json::to_value(&game_events).map_err(to_napi_err)
 }
 
@@ -152,7 +153,7 @@ pub fn parse_events(
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();
 
-    let game_events = exports::parse_events(&bytes, &huf, parser::parse_demo::ParsingMode::Normal, event_names, player_props, other_props).map_err(to_napi_err)?;
+    let game_events = exports::parse_events(&bytes, &huf, ParsingMode::Normal, event_names, player_props, other_props).map_err(to_napi_err)?;
     serde_json::to_value(&game_events).map_err(to_napi_err)
 }
 
@@ -176,7 +177,7 @@ pub fn parse_ticks(
     let output = exports::parse_ticks(
         &bytes,
         &huf,
-        parser::parse_demo::ParsingMode::Normal,
+        ParsingMode::Normal,
         wanted_props,
         wanted_ticks,
         wanted_players_u64,
@@ -193,7 +194,7 @@ pub fn parse_player_info(path_or_buf: Either<String, Buffer>) -> napi::Result<Va
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();
 
-    let player_md = exports::parse_player_info(&bytes, &huf, parser::parse_demo::ParsingMode::Normal).map_err(to_napi_err)?;
+    let player_md = exports::parse_player_info(&bytes, &huf, ParsingMode::Normal).map_err(to_napi_err)?;
     serde_json::to_value(&player_md).map_err(to_napi_err)
 }
 
@@ -202,7 +203,7 @@ pub fn parse_player_skins(path_or_buf: Either<String, Buffer>) -> napi::Result<V
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();
     
-    let skins = exports::parse_player_skins(&bytes, &huf, parser::parse_demo::ParsingMode::Normal).map_err(to_napi_err)?;
+    let skins = exports::parse_player_skins(&bytes, &huf, ParsingMode::Normal).map_err(to_napi_err)?;
     serde_json::to_value(&skins).map_err(to_napi_err)
 }
 

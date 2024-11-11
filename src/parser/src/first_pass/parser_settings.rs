@@ -1,13 +1,10 @@
+use crate::definitions::Class;
 use super::sendtables::Serializer;
 use super::stringtables::StringTable;
 use crate::first_pass::prop_controller::PropController;
 use crate::first_pass::prop_controller::PropInfo;
-use crate::first_pass::read_bits::DemoParserError;
 use crate::first_pass::stringtables::UserInfo;
-use crate::maps::FRIENDLY_NAMES_MAPPING;
-use crate::maps::NON_MULTITHREADABLE_PROPS;
 use crate::second_pass::decoder::QfMapper;
-use crate::second_pass::other_netmessages::Class;
 use crate::second_pass::parser_settings::PlayerEndMetaData;
 use crate::second_pass::parser_settings::SpecialIDs;
 use crate::second_pass::variants::Variant;
@@ -68,23 +65,13 @@ pub struct FirstPassParser<'a> {
     pub parse_projectiles: bool,
     pub name_to_id: AHashMap<String, u32>,
     pub id: u32,
-    pub wanted_prop_ids: Vec<u32>,
     pub controller_ids: SpecialIDs,
     pub only_header: bool,
     pub prop_infos: Vec<PropInfo>,
     pub header: AHashMap<String, String>,
-    pub is_multithreadable: bool,
     pub needs_velocity: bool,
     pub sendtable_message: Option<CDemoSendTables>,
     pub order_by_steamid: bool,
-}
-pub fn needs_velocity(props: &[String]) -> bool {
-    for prop in props {
-        if prop.contains("velo") {
-            return true;
-        }
-    }
-    false
 }
 
 impl<'a> FirstPassParser<'a> {
@@ -94,7 +81,6 @@ impl<'a> FirstPassParser<'a> {
             sendtable_message: None,
             needs_velocity: needs_velocity(&inputs.wanted_player_props),
             added_temp_props: vec![],
-            is_multithreadable: check_multithreadability(&inputs.wanted_player_props),
             stringtable_players: BTreeMap::default(),
             only_header: inputs.only_header,
             ge_list_set: false,
@@ -107,7 +93,7 @@ impl<'a> FirstPassParser<'a> {
                 inputs.wanted_prop_states.clone(),
                 inputs.real_name_to_og_name.clone(),
                 false,
-                &vec!["None".to_string()],
+                &["None".to_string()],
             ),
             cls_by_id: None,
             player_md: vec![],
@@ -118,7 +104,7 @@ impl<'a> FirstPassParser<'a> {
             ptr: 0,
             baselines: AHashMap::default(),
             tick: 0,
-            huf: &inputs.huffman_lookup_table,
+            huf: inputs.huffman_lookup_table,
             qf_mapper: QfMapper {
                 idx: 0,
                 map: AHashMap::default(),
@@ -133,43 +119,15 @@ impl<'a> FirstPassParser<'a> {
             wanted_ticks: AHashSet::from_iter(inputs.wanted_ticks.iter().cloned()),
             wanted_other_props: inputs.wanted_other_props.clone(),
             wanted_prop_states: inputs.wanted_prop_states.clone(),
-            settings: &inputs,
-            controller_ids: SpecialIDs::new(),
+            settings: inputs,
+            controller_ids: SpecialIDs::default(),
             id: 0,
-            wanted_prop_ids: vec![],
             prop_infos: vec![],
             header: AHashMap::default(),
         }
     }
 }
-pub fn check_multithreadability(player_props: &[String]) -> bool {
-    for name in player_props {
-        if NON_MULTITHREADABLE_PROPS.contains(name) {
-            return false;
-        }
-    }
-    true
-}
 
-pub fn rm_user_friendly_names(names: &Vec<String>) -> Result<Vec<String>, DemoParserError> {
-    let mut real_names = vec![];
-    for name in names {
-        match FRIENDLY_NAMES_MAPPING.get(name) {
-            Some(real_name) => real_names.push(real_name.to_string()),
-            None => return Err(DemoParserError::UnknownPropName(name.clone())),
-        }
-    }
-    Ok(real_names)
+pub fn needs_velocity(props: &[String]) -> bool {
+    props.iter().any(|p| p.contains("velo"))
 }
-
-pub fn rm_map_user_friendly_names(map: &AHashMap<String, Variant>) -> Result<AHashMap<String, Variant>, DemoParserError> {
-    let mut real_names_map: AHashMap<String, Variant> = AHashMap::default();
-    for (name, variant) in map {
-        match FRIENDLY_NAMES_MAPPING.get(&name) {
-            Some(real_name) => real_names_map.insert(real_name.to_string(), variant.clone()),
-            None => return Err(DemoParserError::UnknownPropName(name.to_string())),
-        };
-    }
-    Ok(real_names_map)
-}
-

@@ -1,12 +1,21 @@
+#![allow(clippy::unnecessary_lazy_evaluations)]
+
+use crate::definitions::Class;
+use crate::definitions::DemoParserError;
+use crate::first_pass::prop_controller::PropController;
+use crate::first_pass::prop_controller::FLATTENED_VEC_MAX_LEN;
+use crate::first_pass::prop_controller::ITEM_PURCHASE_COST;
+use crate::first_pass::prop_controller::ITEM_PURCHASE_COUNT;
+use crate::first_pass::prop_controller::ITEM_PURCHASE_DEF_IDX;
+use crate::first_pass::prop_controller::ITEM_PURCHASE_HANDLE;
 use crate::first_pass::read_bits::Bitreader;
-use crate::first_pass::read_bits::DemoParserError;
 use crate::first_pass::sendtables::find_field;
-use crate::first_pass::sendtables::get_decoder_from_field;
 use crate::first_pass::sendtables::get_propinfo;
 use crate::first_pass::sendtables::Field;
 use crate::first_pass::sendtables::FieldInfo;
 use crate::second_pass::game_events::GameEventInfo;
-use crate::second_pass::other_netmessages::Class;
+use crate::second_pass::game_events::RoundEnd;
+use crate::second_pass::game_events::RoundWinReason;
 use crate::second_pass::parser_settings::SecondPassParser;
 use crate::second_pass::path_ops::*;
 use crate::second_pass::variants::Variant;
@@ -34,6 +43,7 @@ pub struct PlayerMetaData {
     pub name: Option<String>,
     pub team_num: Option<u32>,
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntityType {
     PlayerController,
@@ -43,65 +53,49 @@ pub enum EntityType {
     Normal,
     C4,
 }
-enum EntityCmd {
-    Delete,
-    CreateAndUpdate,
-    Update,
-}
 
 impl<'a> SecondPassParser<'a> {
     pub fn parse_packet_ents(&mut self, bytes: &[u8], is_fullpacket: bool) -> Result<(), DemoParserError> {
-        if !self.parse_entities {
-            return Ok(());
-        }
-        let msg = match CsvcMsgPacketEntities::decode(bytes) {
-            Err(_) => return Err(DemoParserError::MalformedMessage),
-            Ok(msg) => msg,
-        };
+        let msg = CsvcMsgPacketEntities::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
 
         let mut bitreader = Bitreader::new(msg.entity_data());
         let mut entity_id: i32 = -1;
         let mut events_to_emit = vec![];
         for _ in 0..msg.updated_entries() {
             entity_id += 1 + (bitreader.read_u_bit_var()? as i32);
-            // Read 2 bits to know which operation should be done to the entity.
-            let cmd = match bitreader.read_nbits(2)? {
-                0b01 => EntityCmd::Delete,
-                0b11 => EntityCmd::Delete,
-                0b10 => EntityCmd::CreateAndUpdate,
-                0b00 => EntityCmd::Update,
-                _ => return Err(DemoParserError::ImpossibleCmd),
-            };
 
-            match cmd {
-                EntityCmd::Delete => {
+            // Read 2 bits to know which operation should be done to the entity.
+            match bitreader.read_nbits(2)? {
+                // Delete
+                0b01 | 0b11 => {
                     self.projectiles.remove(&entity_id);
                     if let Some(entry) = self.entities.get_mut(entity_id as usize) {
                         *entry = None;
                     }
-                }
-                EntityCmd::CreateAndUpdate => {
-                    self.create_new_entity(&mut bitreader, &entity_id, &mut events_to_emit)?;
+                },
+                // CreateAndUpdate
+                0b10 => {
+                    self.create_new_entity(&mut bitreader, entity_id)?;
                     self.update_entity(&mut bitreader, entity_id, false, &mut events_to_emit, is_fullpacket)?;
-                }
-                EntityCmd::Update => {
-                    if msg.has_pvs_vis_bits() > 0 {
-                        // Most entities pass trough here. Seems like entities that are not updated.
-                        if bitreader.read_nbits(2)? & 0x01 == 1 {
-                            continue;
-                        }
+                },
+                // Update
+                0b00 => {
+                    // Most entities pass trough here. Seems like entities that are not updated.
+                    if msg.has_pvs_vis_bits() > 0 && bitreader.read_nbits(2)? & 0x01 == 1 {
+                        continue;
                     }
                     self.update_entity(&mut bitreader, entity_id, false, &mut events_to_emit, is_fullpacket)?;
-                }
-            }
+                },
+                _ => return Err(DemoParserError::ImpossibleCmd),
+            };
         }
         if !events_to_emit.is_empty() {
-            self.emit_events(events_to_emit)?;
+            self.emit_events(&events_to_emit)?;
         }
         Ok(())
     }
 
-    pub fn update_entity(
+    fn update_entity(
         &mut self,
         bitreader: &mut Bitreader,
         entity_id: i32,
@@ -116,7 +110,8 @@ impl<'a> SecondPassParser<'a> {
         }
         Ok(())
     }
-    pub fn parse_paths(&mut self, bitreader: &mut Bitreader) -> Result<usize, DemoParserError> {
+
+    fn parse_paths(&mut self, bitreader: &mut Bitreader) -> Result<usize, DemoParserError> {
         /*
         Create a field path by decoding using a Huffman tree.
         The huffman tree can be found at the bottom of entities_utils.rs
@@ -186,8 +181,9 @@ impl<'a> SecondPassParser<'a> {
 
         // Create an "empty" path ([-1, 0, 0, 0, 0, 0, 0])
         // For perfomance reasons have them always the same len
-        let mut fp = generate_fp();
+        let mut fp = FieldPath::default();
         let mut idx = 0;
+
         // Do huffman decoding with a lookup table instead of reading one bit at a time
         // and traversing a tree.
         // Here we peek ("HUFFMAN_CODE_MAXLEN" == 17) amount of bits and see from a table which
@@ -198,8 +194,8 @@ impl<'a> SecondPassParser<'a> {
                 bitreader.refill();
             }
 
-            let peeked_bits = bitreader.peek(HUFFMAN_CODE_MAXLEN);
-            let (symbol, code_len) = self.huffman_lookup_table[peeked_bits as usize];
+            let peeked_bits = bitreader.peek(HUFFMAN_CODE_MAXLEN) as usize;
+            let (symbol, code_len) = self.huffman_lookup_table[peeked_bits];
             bitreader.consume(code_len as u32);
             if symbol == STOP_READING_SYMBOL {
                 break;
@@ -211,7 +207,7 @@ impl<'a> SecondPassParser<'a> {
         Ok(idx)
     }
 
-    pub fn decode_entity_update(
+    fn decode_entity_update(
         &mut self,
         bitreader: &mut Bitreader,
         entity_id: i32,
@@ -220,23 +216,21 @@ impl<'a> SecondPassParser<'a> {
         is_baseline: bool,
         events_to_emit: &mut Vec<GameEventInfo>,
     ) -> Result<usize, DemoParserError> {
-        let entity = match self.entities.get_mut(entity_id as usize) {
-            Some(Some(entity)) => entity,
-            _ => return Err(DemoParserError::EntityNotFound),
+        let Some(Some(entity)) = self.entities.get_mut(entity_id as usize) else {
+            return Err(DemoParserError::EntityNotFound)
         };
-        let class = match self.cls_by_id.get(entity.cls_id as usize) {
-            Some(cls) => cls,
-            None => return Err(DemoParserError::ClassNotFound),
-        };
+        let class = self.cls_by_id.get(entity.cls_id as usize).ok_or_else(|| DemoParserError::ClassNotFound)?;
 
         for path in self.paths.iter().take(n_updates) {
-            let field = find_field(&path, &class.serializer)?;
-            let field_info = get_propinfo(&field, path);
-            let decoder = get_decoder_from_field(field)?;
+            let field = find_field(path, &class.serializer)?;
+            let field_info = get_propinfo(field, path);
+            let decoder = field.get_decoder()?;
             let result = bitreader.decode(&decoder, self.qf_mapper)?;
 
             if !is_fullpacket && !is_baseline {
-                events_to_emit.extend(SecondPassParser::listen_for_events(entity, &result, field, field_info, &self.prop_controller));
+                if let Some(event) = SecondPassParser::extract_event(entity, &result, field_info, self.prop_controller) {
+                    events_to_emit.push(event);
+                }
             }
             if self.is_debug_mode {
                 SecondPassParser::debug_inspect(
@@ -257,7 +251,62 @@ impl<'a> SecondPassParser<'a> {
         }
         Ok(n_updates)
     }
-    pub fn debug_inspect(
+
+    fn extract_event(
+        entity: &mut Entity,
+        result: &Variant,
+        field_info: Option<FieldInfo>,
+        prop_controller: &PropController,
+    ) -> Option<GameEventInfo> {
+        // Might want to start splitting this function
+        let prop_id = field_info?.prop_id;
+
+        if prop_controller.special_ids.round_end_count.is_some_and(|id| prop_id == id) {
+            return Some(GameEventInfo::RoundEnd(RoundEnd {
+                old_value: entity.props.get(&prop_id).cloned(),
+                new_value: Some(result.clone()),
+            }))
+        }
+        if prop_controller.special_ids.round_win_reason.is_some_and(|id| prop_id == id) {
+            return if let Variant::I32(reason) = result {
+                Some(GameEventInfo::RoundWinReason(RoundWinReason { reason: *reason }))
+            } else {
+                None
+            }
+        }
+        if prop_controller.special_ids.round_start_count.is_some_and(|id| prop_id == id) {
+            return Some(GameEventInfo::FreezePeriodStart(true))
+        }
+        if prop_controller.special_ids.match_end_count.is_some_and(|id| prop_id == id) {
+            return Some(GameEventInfo::MatchEnd())
+        }
+
+        if (ITEM_PURCHASE_COST..ITEM_PURCHASE_COST + FLATTENED_VEC_MAX_LEN).contains(&prop_id) {
+            return Some(GameEventInfo::WeaponCreateNCost((result.clone(), entity.entity_id)))
+        }
+        if (ITEM_PURCHASE_HANDLE..ITEM_PURCHASE_HANDLE + FLATTENED_VEC_MAX_LEN).contains(&prop_id) {
+            return Some(GameEventInfo::WeaponCreateHitem((result.clone(), entity.entity_id)))
+        }
+        if (ITEM_PURCHASE_COUNT..ITEM_PURCHASE_COUNT + FLATTENED_VEC_MAX_LEN).contains(&prop_id) {
+            return Some(GameEventInfo::WeaponPurchaseCount((
+                result.clone(),
+                entity.entity_id,
+                prop_id,
+            )))
+        }
+        if (ITEM_PURCHASE_DEF_IDX..ITEM_PURCHASE_DEF_IDX + FLATTENED_VEC_MAX_LEN).contains(&prop_id) {
+            return Some(GameEventInfo::WeaponCreateDefIdx((
+                result.clone(),
+                entity.entity_id,
+                prop_id,
+            )))
+        }
+
+        None
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn debug_inspect(
         _result: &Variant,
         field: &Field,
         _tick: i32,
@@ -276,7 +325,7 @@ impl<'a> SecondPassParser<'a> {
         }
     }
 
-    pub fn insert_field(entity: &mut Entity, result: Variant, field_info: Option<FieldInfo>) {
+    fn insert_field(entity: &mut Entity, result: Variant, field_info: Option<FieldInfo>) {
         if let Some(fi) = field_info {
             if fi.should_parse {
                 entity.props.insert(fi.prop_id, result);
@@ -290,72 +339,69 @@ impl<'a> SecondPassParser<'a> {
             Some(entry) => *entry = *fp_src,
             // need to extend vec (rare)
             None => {
-                self.paths.resize(idx + 1, generate_fp());
-                match self.paths.get_mut(idx) {
-                    Some(entry) => *entry = *fp_src,
-                    None => return Err(DemoParserError::VectorResizeFailure),
-                }
+                self.paths.resize_with(idx + 1, FieldPath::default);
+                let entry = self.paths.get_mut(idx).ok_or_else(|| DemoParserError::VectorResizeFailure)?;
+                *entry = *fp_src;
             }
-        }
-        Ok(())
-    }
-    fn create_new_entity(&mut self, bitreader: &mut Bitreader, entity_id: &i32, _events_to_emit: &mut Vec<GameEventInfo>) -> Result<(), DemoParserError> {
-        let cls_id: u32 = bitreader.read_nbits(8)?;
-        // Both of these are not used. Don't think they are interesting for the parser
-        let _serial = bitreader.read_nbits(NSERIALBITS)?;
-        let _unknown = bitreader.read_varint();
-        let entity_type = self.check_entity_type(&cls_id)?;
-        match entity_type {
-            EntityType::Projectile => {
-                self.projectiles.insert(*entity_id);
-            }
-            EntityType::Rules => self.rules_entity_id = Some(*entity_id),
-            EntityType::C4 => self.c4_entity_id = Some(*entity_id),
-            _ => {}
-        };
-        let entity = Entity {
-            entity_id: *entity_id,
-            cls_id,
-            props: AHashMap::with_capacity(0),
-            entity_type,
-        };
-        if self.entities.len() as i32 <= *entity_id {
-            // if corrupt, this can cause oom allocations
-            if *entity_id > 100000 {
-                return Err(DemoParserError::EntityNotFound);
-            }
-            self.entities.resize(*entity_id as usize + 1, None);
-        }
-        match self.entities.get_mut(*entity_id as usize) {
-            Some(entry) => *entry = Some(entity),
-            None => return Err(DemoParserError::VectorResizeFailure),
-        };
-        // Insert baselines
-        if let Some(baseline_bytes) = self.baselines.get(&cls_id) {
-            let b = &baseline_bytes.clone();
-            let mut br = Bitreader::new(&b);
-            self.update_entity(&mut br, *entity_id, true, &mut vec![], false)?;
         }
         Ok(())
     }
 
-    pub fn check_entity_type(&self, cls_id: &u32) -> Result<EntityType, DemoParserError> {
-        let class = match self.cls_by_id.get(*cls_id as usize) {
-            Some(cls) => cls,
-            None => {
-                return Err(DemoParserError::ClassNotFound);
+    fn create_new_entity(&mut self, bitreader: &mut Bitreader, entity_id: i32) -> Result<(), DemoParserError> {
+        let cls_id: u32 = bitreader.read_nbits(8)?;
+        // Both of these are not used. Don't think they are interesting for the parser
+        let _serial = bitreader.read_nbits(NSERIALBITS)?;
+        let _unknown = bitreader.read_varint();
+
+        let entity_type = self.check_entity_type(cls_id)?;
+        match entity_type {
+            EntityType::Projectile => {
+                self.projectiles.insert(entity_id);
             }
-        };
-        match class.name.as_str() {
-            "CCSPlayerController" => return Ok(EntityType::PlayerController),
-            "CCSGameRulesProxy" => return Ok(EntityType::Rules),
-            "CCSTeam" => return Ok(EntityType::Team),
-            "CC4" => return Ok(EntityType::C4),
+            EntityType::Rules => self.rules_entity_id = Some(entity_id),
+            EntityType::C4 => self.c4_entity_id = Some(entity_id),
             _ => {}
+        };
+
+        if self.entities.len() as i32 <= entity_id {
+            // if corrupt, this can cause oom allocations
+            if entity_id > 100000 {
+                return Err(DemoParserError::VectorResizeFailure);
+            }
+            self.entities.resize(entity_id as usize + 1, None);
         }
-        if class.name.contains("Projectile") || class.name == "CIncendiaryGrenade" {
-            return Ok(EntityType::Projectile);
+
+        let entry = self.entities.get_mut(entity_id as usize).ok_or_else(|| DemoParserError::EntityNotFound)?;
+        let entity = Entity {
+            entity_id,
+            cls_id,
+            props: AHashMap::with_capacity(0),
+            entity_type,
+        };
+        *entry = Some(entity);
+
+        // Insert baselines
+        if let Some(baseline_bytes) = self.baselines.get(&cls_id) {
+            let b = &baseline_bytes.clone();
+            let mut br = Bitreader::new(b);
+            self.update_entity(&mut br, entity_id, true, &mut vec![], false)?;
         }
-        return Ok(EntityType::Normal);
+        Ok(())
+    }
+
+    fn check_entity_type(&self, cls_id: u32) -> Result<EntityType, DemoParserError> {
+        let class = self.cls_by_id.get(cls_id as usize).ok_or_else(|| DemoParserError::ClassNotFound)?;
+        match class.name.as_str() {
+            "CCSPlayerController" => Ok(EntityType::PlayerController),
+            "CCSGameRulesProxy" => Ok(EntityType::Rules),
+            "CCSTeam" => Ok(EntityType::Team),
+            "CC4" => Ok(EntityType::C4),
+            _ => {
+                if class.name.contains("Projectile") || class.name == "CIncendiaryGrenade" {
+                    return Ok(EntityType::Projectile);
+                }
+                Ok(EntityType::Normal)
+            }
+        }
     }
 }

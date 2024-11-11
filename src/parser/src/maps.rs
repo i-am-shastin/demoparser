@@ -1,5 +1,5 @@
+use crate::definitions::DemoParserError;
 use crate::first_pass::prop_controller::*;
-use crate::first_pass::read_bits::DemoParserError;
 use crate::second_pass::collect_data::PropType;
 use crate::second_pass::decoder::Decoder;
 use crate::second_pass::decoder::Decoder::*;
@@ -613,7 +613,8 @@ pub fn demo_cmd_type_from_int(value: i32) -> Result<EDemoCommands, DemoParserErr
         14 => Ok(EDemoCommands::DemSaveGame),
         15 => Ok(EDemoCommands::DemSpawnGroups),
         16 => Ok(EDemoCommands::DemAnimationData),
-        17 => Ok(EDemoCommands::DemMax),
+        17 => Ok(EDemoCommands::DemAnimationHeader),
+        18 => Ok(EDemoCommands::DemMax),
         64 => Ok(EDemoCommands::DemIsCompressed),
         _ => Err(DemoParserError::UnknownDemoCmd(value)),
     }

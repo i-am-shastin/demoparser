@@ -1,7 +1,7 @@
 use parser::exports;
 use parser::parse_demo::ParsingMode;
 use parser::second_pass::parser_settings::create_huffman_lookup_table;
-use parser::second_pass::variants::to_serde_output;
+use parser::serde_helper::to_serde_output;
 use parser::second_pass::variants::Variant;
 use serde::de::Visitor;
 use serde::Deserialize;

@@ -3,10 +3,9 @@ use std::fs::File;
 
 use ahash::AHashMap;
 use memmap2::MmapOptions;
-use crate::first_pass::parser_settings::rm_map_user_friendly_names;
-use crate::first_pass::parser_settings::rm_user_friendly_names;
+use crate::definitions::DemoParserError;
 use crate::first_pass::parser_settings::ParserInputs;
-use crate::first_pass::read_bits::DemoParserError;
+use crate::maps::FRIENDLY_NAMES_MAPPING;
 use crate::parse_demo::DemoOutput;
 use crate::parse_demo::Parser;
 use crate::parse_demo::ParsingMode;
@@ -30,6 +29,23 @@ fn parse_demo(bytes: &BytesVariant, parser: &mut Parser) -> Result<DemoOutput, D
         BytesVariant::Mmap(m) => parser.parse_demo(m),
         BytesVariant::Vec(v) => parser.parse_demo(v),
     }
+}
+
+fn get_friendly_name(name: &String) -> Result<String, DemoParserError> {
+    FRIENDLY_NAMES_MAPPING.get(name).map(|s| s.to_string()).ok_or_else(|| DemoParserError::UnknownPropName(name.to_string()))
+}
+
+fn rm_user_friendly_names(names: &[String]) -> Result<Vec<String>, DemoParserError> {
+    names.iter().map(get_friendly_name).collect()
+}
+
+fn rm_map_user_friendly_names(names_hm: &AHashMap<String, Variant>) -> Result<AHashMap<String, Variant>, DemoParserError> {
+    names_hm
+        .iter()
+        .map(|(name, variant)| {
+            Ok((get_friendly_name(name)?, variant.clone()))
+        })
+        .collect()
 }
 
 pub fn parse_player_skins(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, parsing_mode: ParsingMode) -> Result<Vec<EconItem>, DemoParserError> {
