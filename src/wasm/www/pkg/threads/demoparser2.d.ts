@@ -2,34 +2,36 @@
 /* eslint-disable */
 /**
  * @param {Uint8Array} file
- * @param {string | undefined} [event_name]
- * @param {any[] | undefined} [wanted_player_props]
- * @param {any[] | undefined} [wanted_other_props]
+ * @param {string} event_name
+ * @param {(string)[] | undefined} [player_props]
+ * @param {(string)[] | undefined} [other_props]
  * @returns {any}
  */
-export function parseEvent(file: Uint8Array, event_name?: string, wanted_player_props?: any[], wanted_other_props?: any[]): any;
+export function parseEvent(file: Uint8Array, event_name: string, player_props?: (string)[], other_props?: (string)[]): any;
 /**
  * @param {Uint8Array} file
- * @param {any[] | undefined} [event_names]
- * @param {any[] | undefined} [wanted_player_props]
- * @param {any[] | undefined} [wanted_other_props]
+ * @param {(string)[]} event_names
+ * @param {(string)[] | undefined} [player_props]
+ * @param {(string)[] | undefined} [other_props]
  * @returns {any}
  */
-export function parseEvents(file: Uint8Array, event_names?: any[], wanted_player_props?: any[], wanted_other_props?: any[]): any;
-/**
- * @param {Uint8Array} fileBytes
- * @returns {any}
- */
-export function listGameEvents(fileBytes: Uint8Array): any;
+export function parseEvents(file: Uint8Array, event_names: (string)[], player_props?: (string)[], other_props?: (string)[]): any;
 /**
  * @param {Uint8Array} file
- * @param {any[] | undefined} [wanted_props]
+ * @param {(string)[]} wanted_props
  * @param {Int32Array | undefined} [wanted_ticks]
- * @param {any[] | undefined} [wanted_players]
+ * @param {(string)[] | undefined} [wanted_players]
  * @param {boolean | undefined} [struct_of_arrays]
+ * @param {boolean | undefined} [order_by_steamid]
+ * @param {(WantedPropState)[] | undefined} [prop_states]
  * @returns {any}
  */
-export function parseTicks(file: Uint8Array, wanted_props?: any[], wanted_ticks?: Int32Array, wanted_players?: any[], struct_of_arrays?: boolean): any;
+export function parseTicks(file: Uint8Array, wanted_props: (string)[], wanted_ticks?: Int32Array, wanted_players?: (string)[], struct_of_arrays?: boolean, order_by_steamid?: boolean, prop_states?: (WantedPropState)[]): any;
+/**
+ * @param {Uint8Array} file
+ * @returns {any}
+ */
+export function listGameEvents(file: Uint8Array): any;
 /**
  * @param {Uint8Array} file
  * @returns {any}
@@ -49,6 +51,9 @@ export function initThreadPool(num_threads: number): Promise<any>;
  * @param {number} receiver
  */
 export function wbg_rayon_start_worker(receiver: number): void;
+export class WantedPropState {
+  free(): void;
+}
 export class wbg_rayon_PoolBuilder {
   free(): void;
   /**
@@ -65,12 +70,13 @@ export class wbg_rayon_PoolBuilder {
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
-  readonly parseEvent: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
-  readonly parseEvents: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
-  readonly listGameEvents: (a: number, b: number, c: number) => void;
-  readonly parseTicks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
-  readonly parseGrenades: (a: number, b: number, c: number) => void;
-  readonly parseHeader: (a: number, b: number, c: number) => void;
+  readonly __wbg_wantedpropstate_free: (a: number, b: number) => void;
+  readonly parseEvent: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => Array;
+  readonly parseEvents: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => Array;
+  readonly parseTicks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => Array;
+  readonly listGameEvents: (a: number, b: number) => Array;
+  readonly parseGrenades: (a: number, b: number) => Array;
+  readonly parseHeader: (a: number, b: number) => Array;
   readonly __wbg_wbg_rayon_poolbuilder_free: (a: number, b: number) => void;
   readonly wbg_rayon_poolbuilder_numThreads: (a: number) => number;
   readonly wbg_rayon_poolbuilder_receiver: (a: number) => number;
@@ -78,10 +84,12 @@ export interface InitOutput {
   readonly initThreadPool: (a: number) => number;
   readonly wbg_rayon_start_worker: (a: number) => void;
   readonly memory: WebAssembly.Memory;
-  readonly __wbindgen_export_1: (a: number, b: number) => number;
-  readonly __wbindgen_export_2: (a: number, b: number, c: number, d: number) => number;
-  readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
-  readonly __wbindgen_export_3: (a: number) => void;
+  readonly __wbindgen_malloc: (a: number, b: number) => number;
+  readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+  readonly __wbindgen_export_3: WebAssembly.Table;
+  readonly __externref_table_alloc: () => number;
+  readonly __externref_table_dealloc: (a: number) => void;
+  readonly __wbindgen_exn_store: (a: number) => void;
   readonly __wbindgen_thread_destroy: (a?: number, b?: number, c?: number) => void;
   readonly __wbindgen_start: (a: number) => void;
 }

@@ -21,16 +21,28 @@ getrandom = { version = "0.2.15", features = ["js"] }
 threads = ["dep:wasm-bindgen-rayon"]
 
 [profile.release]
-# debug = true
-strip = true
-lto = "fat"
-opt-level = 2
+debug = true
+# strip = true
+# lto = "fat"
+# opt-level = 2
 codegen-units = 1
-# panic = "abort"
+panic = "abort"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["--enable-threads", "--enable-bulk-memory", "-O2", "-O4"]
 # wasm-opt = false
+wasm-opt = [
+    "--debuginfo",
+    "--enable-threads",
+    "--enable-bulk-memory",
+    "--partial-inlining-ifs=4",
+    "--closed-world",
+    "-O2",
+    "--gufa",
+    "--monomorphize",
+    "-O3",
+    "--type-merging",
+    "-O4",
+]
 
 [dependencies.parser]
 path = "../parser"

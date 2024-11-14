@@ -101,7 +101,7 @@ pub fn parse_ticks(
 ) -> Result<JsValue, JsError> {
     let wanted_players_u64 = Some(wanted_players.map_or_else(Vec::new, |v| v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect()));
     let wanted_prop_states = HashMap::from_iter(prop_states.unwrap_or_default().into_iter().map(|prop| (prop.prop, prop.state)));
-    let order_by_steamid = matches!(order_by_steamid, Some(true));
+    let order_by_steamid = order_by_steamid.unwrap_or_default();
 
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let output = exports::parse_ticks(

@@ -169,7 +169,7 @@ pub fn parse_ticks(
 ) -> napi::Result<Value> {
     let wanted_players_u64 = Some(wanted_players.map_or_else(Vec::new, |v| v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect()));
     let wanted_prop_states = prop_states.unwrap_or_default().into_iter().map(|prop| (prop.prop, prop.state.0)).collect();
-    let order_by_steamid = matches!(order_by_steamid, Some(true));
+    let order_by_steamid = order_by_steamid.unwrap_or_default();
 
     let bytes = resolve_byte_type(path_or_buf)?;
     let huf = create_huffman_lookup_table();

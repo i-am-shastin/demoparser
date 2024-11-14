@@ -1,13 +1,27 @@
 from demoparser2 import DemoParser
 import time
 import glob
+import statistics
+import tracemalloc
 
-files = glob.glob("/path/to/demos/*")
+tracemalloc.start()
 
-before = time.time()
+files = glob.glob("D:/Work/cs2-demo-stats/.demos/*")
+results = []
 
-for file in files:
-    parser = DemoParser(file)
-    df = parser.parse_event("player_death", player=["X", "Y"])
+for i in range(10):
+    before = time.time()
 
-print(time.time() - before)
+    for file in files:
+        parser = DemoParser(file)
+        df = parser.parse_event("player_death", player=["X", "Y"])
+
+    result = time.time() - before
+    results.append(result)
+    print(result)
+
+print('\033[35m-- Median: ' + str(statistics.median(results)) + ', mean: ' + str(statistics.mean(results)) + '\033[0m')
+current, peak = tracemalloc.get_traced_memory()
+print(f"\033[35m-- Memory usage: {int(current / 16**3) / 10}MB; {int(peak / 16**3) / 10}MB\033[0m")
+
+tracemalloc.stop()

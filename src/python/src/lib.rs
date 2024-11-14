@@ -543,14 +543,14 @@ pub fn series_from_multiple_events(
     let mut vv = vec![];
     for (k, v) in per_ge {
         let pairs: Vec<EventField> = v.iter().flat_map(|x| x.fields.clone()).collect();
-        let per_key_name = pairs.iter().into_group_map_by(|x| &x.name);
+        let per_key_name = pairs.into_iter().into_group_map_by(|x| x.name.clone());
 
         let mut series_columns = vec![];
         let mut py_columns = vec![];
         let mut rows = 0;
 
         for (name, vals) in per_key_name {
-            match column_from_pairs(&vals, name, py)? {
+            match column_from_pairs(vals, &name, py)? {
                 DataFrameColumn::PyAny(p) => py_columns.push((p, name)),
                 DataFrameColumn::Series(s) => {
                     rows = s.len().max(rows);
@@ -606,14 +606,14 @@ pub enum DataFrameColumn {
 
 fn series_from_event(events: Vec<GameEvent>, py: Python) -> Result<Py<PyAny>, DemoParserError> {
     let pairs = events.into_iter().flat_map(|x| x.fields).collect_vec();
-    let per_key_name = pairs.iter().into_group_map_by(|x| &x.name);
+    let per_key_name = pairs.into_iter().into_group_map_by(|x| x.name.clone());
 
     let mut series_columns = vec![];
     let mut py_columns = vec![];
     let mut rows = 0;
 
     for (name, vals) in per_key_name {
-        match column_from_pairs(&vals, name, py)? {
+        match column_from_pairs(vals, &name, py)? {
             DataFrameColumn::PyAny(p) => py_columns.push((p, name)),
             DataFrameColumn::Series(s) => {
                 rows = s.len().max(rows);
@@ -657,9 +657,9 @@ fn series_from_event(events: Vec<GameEvent>, py: Python) -> Result<Py<PyAny>, De
     Ok(dfp)
 }
 
-fn to_f32_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
+fn to_f32_series(pairs: Vec<EventField>, name: &str) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
             if let Some(Variant::F32(val)) = pair.data {
                 Some(val)
@@ -671,9 +671,9 @@ fn to_f32_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
     DataFrameColumn::Series(Series::new(name, v))
 }
 
-fn to_u32_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
+fn to_u32_series(pairs: Vec<EventField>, name: &str) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
             if let Some(Variant::U32(val)) = pair.data {
                 Some(val)
@@ -685,9 +685,9 @@ fn to_u32_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
     DataFrameColumn::Series(Series::new(name, v))
 }
 
-fn to_i32_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
+fn to_i32_series(pairs: Vec<EventField>, name: &str) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
             if let Some(Variant::I32(val)) = pair.data {
                 Some(val)
@@ -699,9 +699,9 @@ fn to_i32_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
     DataFrameColumn::Series(Series::new(name, v))
 }
 
-fn to_u64_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
+fn to_u64_series(pairs: Vec<EventField>, name: &str) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
             if let Some(Variant::U64(val)) = pair.data {
                 Some(val)
@@ -713,12 +713,12 @@ fn to_u64_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
     DataFrameColumn::Series(Series::new(name, v))
 }
 
-fn to_py_string_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFrameColumn {
+fn to_py_string_col(pairs: Vec<EventField>, _name: &str, py: Python) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
-            if let Some(Variant::StringVec(val)) = &pair.data {
-                Some(val.clone())
+            if let Some(Variant::StringVec(val)) = pair.data {
+                Some(val)
             } else {
                 None
             }
@@ -727,12 +727,12 @@ fn to_py_string_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFrame
     DataFrameColumn::PyAny(v.to_object(py))
 }
 
-fn to_py_u64_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFrameColumn {
+fn to_py_u64_col(pairs: Vec<EventField>, _name: &str, py: Python) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
-            if let Some(Variant::U64Vec(val)) = &pair.data {
-                Some(val.clone())
+            if let Some(Variant::U64Vec(val)) = pair.data {
+                Some(val)
             } else {
                 None
             }
@@ -741,12 +741,12 @@ fn to_py_u64_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFrameCol
     DataFrameColumn::PyAny(v.to_object(py))
 }
 
-fn to_py_u32_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFrameColumn {
+fn to_py_u32_col(pairs: Vec<EventField>, _name: &str, py: Python) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
-            if let Some(Variant::U32Vec(val)) = &pair.data {
-                Some(val.clone())
+            if let Some(Variant::U32Vec(val)) = pair.data {
+                Some(val)
             } else {
                 None
             }
@@ -755,12 +755,12 @@ fn to_py_u32_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFrameCol
     DataFrameColumn::PyAny(v.to_object(py))
 }
 
-fn to_string_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
+fn to_string_series(pairs: Vec<EventField>, name: &str) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
-            if let Some(Variant::String(val)) = &pair.data {
-                Some(val.to_owned())
+            if let Some(Variant::String(val)) = pair.data {
+                Some(val)
             } else {
                 None
             }
@@ -769,9 +769,9 @@ fn to_string_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
     DataFrameColumn::Series(Series::new(name, v))
 }
 
-fn to_bool_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
+fn to_bool_series(pairs: Vec<EventField>, name: &str) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
             if let Some(Variant::Bool(val)) = pair.data {
                 Some(val)
@@ -783,9 +783,9 @@ fn to_bool_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
     DataFrameColumn::Series(Series::new(name, v))
 }
 
-fn to_py_sticker_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFrameColumn {
+fn to_py_sticker_col(pairs: Vec<EventField>, _name: &str, py: Python) -> DataFrameColumn {
     let v = pairs
-        .iter()
+        .into_iter()
         .map(|pair| {
             let Some(Variant::Stickers(weapon)) = &pair.data else { return vec![] };
             weapon
@@ -805,21 +805,21 @@ fn to_py_sticker_col(pairs: &[&EventField], _name: &str, py: Python) -> DataFram
     DataFrameColumn::PyAny(v.to_object(py))
 }
 
-fn to_null_series(pairs: &[&EventField], name: &str) -> DataFrameColumn {
+fn to_null_series(pairs: &[EventField], name: &str) -> DataFrameColumn {
     // All series are null can pick any type
     let v: Vec<Option<i32>> = vec![None; pairs.len()];
     DataFrameColumn::Series(Series::new(name, v))
 }
 
 fn column_from_pairs(
-    pairs: &[&EventField],
+    pairs: Vec<EventField>,
     name: &str,
     py: Python,
 ) -> Result<DataFrameColumn, DemoParserError> {
-    let field_type = find_type_of_vals(pairs)?;
+    let field_type = find_type_of_vals(&pairs)?;
 
     let s = match field_type {
-        None => to_null_series(pairs, name),
+        None => to_null_series(&pairs, name),
         Some(Variant::Bool(_)) => to_bool_series(pairs, name),
         Some(Variant::F32(_)) => to_f32_series(pairs, name),
         Some(Variant::U32(_)) => to_u32_series(pairs, name),
@@ -835,7 +835,7 @@ fn column_from_pairs(
     Ok(s)
 }
 
-fn find_type_of_vals(pairs: &[&EventField]) -> Result<Option<Variant>, DemoParserError> {
+fn find_type_of_vals(pairs: &Vec<EventField>) -> Result<Option<Variant>, DemoParserError> {
     // Need to find the correct type for outgoing series
     for pair in pairs {
         if pair.data.is_none() {
