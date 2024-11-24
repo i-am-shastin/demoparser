@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use memmap2::Mmap;
 use serde::Serialize;
 
@@ -87,51 +86,63 @@ pub struct PropColumn {
     pub num_nones: usize,
 }
 
+trait Retain {
+    fn retain_indicies(&mut self, indicies: &[usize]);
+}
+
+impl<T> Retain for Vec<T> {
+    fn retain_indicies(&mut self, indicies: &[usize]) {
+        let mut index = 0;
+        self.retain(|_| {
+            let result = indicies.binary_search(&index).is_ok();
+            index += 1;
+            result
+        });
+    }
+}
+
 impl PropColumn {
-    pub fn slice_to_new(&self, indicies: &[usize]) -> Option<PropColumn> {
-        let data = match &self.data {
-            Some(VarVec::Bool(b)) => VarVec::Bool(indicies.iter().map(|x| b[*x]).collect_vec()),
-            Some(VarVec::I32(b)) => VarVec::I32(indicies.iter().map(|x| b[*x]).collect_vec()),
-            Some(VarVec::F32(b)) => VarVec::F32(indicies.iter().map(|x| b[*x]).collect_vec()),
-            Some(VarVec::String(b)) => VarVec::String(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
-            Some(VarVec::U32(b)) => VarVec::U32(indicies.iter().map(|x| b[*x]).collect_vec()),
-            Some(VarVec::U64(b)) => VarVec::U64(indicies.iter().map(|x| b[*x]).collect_vec()),
-            Some(VarVec::StringVec(b)) => VarVec::StringVec(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
-            Some(VarVec::U64Vec(b)) => VarVec::U64Vec(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
-            Some(VarVec::U32Vec(b)) => VarVec::U32Vec(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
-            Some(VarVec::XYVec(b)) => VarVec::XYVec(indicies.iter().map(|x| b[*x]).collect_vec()),
-            Some(VarVec::XYZVec(b)) => VarVec::XYZVec(indicies.iter().map(|x| b[*x]).collect_vec()),
-            Some(VarVec::Stickers(b)) => VarVec::Stickers(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
-            Some(VarVec::InputHistory(b)) => VarVec::InputHistory(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
-            None => {
-                return Some(PropColumn {
-                    data: None,
-                    num_nones: indicies.len(),
-                })
-            }
+    pub fn retain(&mut self, indicies: &[usize]) {
+        self.num_nones = if self.data.is_none() {
+            indicies.len()
+        } else {
+            0
         };
-        Some(PropColumn {
-            data: Some(data),
-            num_nones: 0,
-        })
+
+        match &mut self.data {
+            Some(VarVec::Bool(v)) => v.retain_indicies(indicies),
+            Some(VarVec::I32(v)) => v.retain_indicies(indicies),
+            Some(VarVec::F32(v)) => v.retain_indicies(indicies),
+            Some(VarVec::String(v)) => v.retain_indicies(indicies),
+            Some(VarVec::U32(v)) => v.retain_indicies(indicies),
+            Some(VarVec::U64(v)) => v.retain_indicies(indicies),
+            Some(VarVec::StringVec(v)) => v.retain_indicies(indicies),
+            Some(VarVec::U64Vec(v)) => v.retain_indicies(indicies),
+            Some(VarVec::U32Vec(v)) => v.retain_indicies(indicies),
+            Some(VarVec::XYVec(v)) => v.retain_indicies(indicies),
+            Some(VarVec::XYZVec(v)) => v.retain_indicies(indicies),
+            Some(VarVec::Stickers(v)) => v.retain_indicies(indicies),
+            Some(VarVec::InputHistory(v)) => v.retain_indicies(indicies),
+            None => {},
+        };
     }
 
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         match &self.data {
-            Some(VarVec::Bool(b)) => b.len(),
-            Some(VarVec::I32(b)) => b.len(),
-            Some(VarVec::F32(b)) => b.len(),
-            Some(VarVec::String(b)) => b.len(),
-            Some(VarVec::U32(b)) => b.len(),
-            Some(VarVec::U64(b)) => b.len(),
-            Some(VarVec::StringVec(b)) => b.len(),
-            Some(VarVec::U64Vec(b)) => b.len(),
-            Some(VarVec::U32Vec(b)) => b.len(),
-            Some(VarVec::XYVec(b)) => b.len(),
-            Some(VarVec::XYZVec(b)) => b.len(),
-            Some(VarVec::Stickers(b)) => b.len(),
-            Some(VarVec::InputHistory(b)) => b.len(),
+            Some(VarVec::Bool(v)) => v.len(),
+            Some(VarVec::I32(v)) => v.len(),
+            Some(VarVec::F32(v)) => v.len(),
+            Some(VarVec::String(v)) => v.len(),
+            Some(VarVec::U32(v)) => v.len(),
+            Some(VarVec::U64(v)) => v.len(),
+            Some(VarVec::StringVec(v)) => v.len(),
+            Some(VarVec::U64Vec(v)) => v.len(),
+            Some(VarVec::U32Vec(v)) => v.len(),
+            Some(VarVec::XYVec(v)) => v.len(),
+            Some(VarVec::XYZVec(v)) => v.len(),
+            Some(VarVec::Stickers(v)) => v.len(),
+            Some(VarVec::InputHistory(v)) => v.len(),
             None => self.num_nones,
         }
     }
@@ -192,14 +203,13 @@ impl PropColumn {
     #[inline(always)]
     pub fn push(&mut self, item: Option<Variant>) {
         if self.data.is_none() {
-            match &item {
-                None => self.num_nones += 1,
-                Some(p) => {
-                    let mut var_vec = VarVec::new(p);
-                    var_vec.push_n_nones(self.num_nones);
-                    self.num_nones = 0;
-                    self.data = Some(var_vec);
-                }
+            if let Some(data) = &item {
+                let mut var_vec = VarVec::new(data);
+                var_vec.push_n_nones(self.num_nones);
+                self.data = Some(var_vec);
+                self.num_nones = 0;
+            } else {
+                self.num_nones += 1;
             }
         }
         if let Some(var_vec) = &mut self.data {
@@ -211,42 +221,46 @@ impl PropColumn {
 impl VarVec {
     #[inline(always)]
     pub fn push_variant(&mut self, item: Option<Variant>) {
-        if item.is_none() {
+        let Some(variant) = item else {
             return self.push_n_nones(1);
-        }
-        match (item, self) {
-            (Some(Variant::F32(p)), VarVec::F32(f)) => f.push(Some(p)),
-            (Some(Variant::I32(p)), VarVec::I32(f)) => f.push(Some(p)),
-            (Some(Variant::String(p)), VarVec::String(f)) => f.push(Some(p)),
-            (Some(Variant::U32(p)), VarVec::U32(f)) => f.push(Some(p)),
-            (Some(Variant::U64(p)), VarVec::U64(f)) => f.push(Some(p)),
-            (Some(Variant::Bool(p)), VarVec::Bool(f)) => f.push(Some(p)),
-            (Some(Variant::StringVec(p)), VarVec::StringVec(f)) => f.push(p),
-            (Some(Variant::U64Vec(p)), VarVec::U64Vec(f)) => f.push(p),
-            (Some(Variant::U32Vec(p)), VarVec::U32Vec(f)) => f.push(p),
-            (Some(Variant::XYVec(p)), VarVec::XYVec(f)) => f.push(Some(p)),
-            (Some(Variant::XYZVec(p)), VarVec::XYZVec(f)) => f.push(Some(p)),
-            (Some(Variant::Stickers(p)), VarVec::Stickers(f)) => f.push(p),
-            (Some(Variant::InputHistory(p)), VarVec::InputHistory(f)) => f.push(p),
+        };
+
+        match (variant, self) {
+            (Variant::F32(data), VarVec::F32(v)) => v.push(Some(data)),
+            (Variant::I32(data), VarVec::I32(v)) => v.push(Some(data)),
+            (Variant::String(data), VarVec::String(v)) => v.push(Some(data)),
+            (Variant::U32(data), VarVec::U32(v)) => v.push(Some(data)),
+            (Variant::U64(data), VarVec::U64(v)) => v.push(Some(data)),
+            (Variant::Bool(data), VarVec::Bool(v)) => v.push(Some(data)),
+            (Variant::StringVec(data), VarVec::StringVec(v)) => v.push(data),
+            (Variant::U64Vec(data), VarVec::U64Vec(v)) => v.push(data),
+            (Variant::U32Vec(data), VarVec::U32Vec(v)) => v.push(data),
+            (Variant::XYVec(data), VarVec::XYVec(v)) => v.push(Some(data)),
+            (Variant::XYZVec(data), VarVec::XYZVec(v)) => v.push(Some(data)),
+            (Variant::Stickers(data), VarVec::Stickers(v)) => v.push(data),
+            (Variant::InputHistory(data), VarVec::InputHistory(v)) => v.push(data),
             _ => {}
         }
     }
 
     fn push_n_nones(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
         match self {
-            VarVec::I32(f) => f.resize(f.len() + count, None),
-            VarVec::F32(f) => f.resize(f.len() + count, None),
-            VarVec::String(f) => f.resize(f.len() + count, None),
-            VarVec::U32(f) => f.resize(f.len() + count, None),
-            VarVec::U64(f) => f.resize(f.len() + count, None),
-            VarVec::Bool(f) => f.resize(f.len() + count, None),
-            VarVec::StringVec(f) => f.resize(f.len() + count, vec![]),
-            VarVec::U64Vec(f) => f.resize(f.len() + count, vec![]),
-            VarVec::XYVec(f) => f.resize(f.len() + count, None),
-            VarVec::XYZVec(f) => f.resize(f.len() + count, None),
-            VarVec::U32Vec(f) => f.resize(f.len() + count, vec![]),
-            VarVec::Stickers(f) => f.resize(f.len() + count, vec![]),
-            VarVec::InputHistory(f) => f.resize(f.len() + count, vec![]),
+            VarVec::I32(v) => v.resize(v.len() + count, None),
+            VarVec::F32(v) => v.resize(v.len() + count, None),
+            VarVec::String(v) => v.resize(v.len() + count, None),
+            VarVec::U32(v) => v.resize(v.len() + count, None),
+            VarVec::U64(v) => v.resize(v.len() + count, None),
+            VarVec::Bool(v) => v.resize(v.len() + count, None),
+            VarVec::StringVec(v) => v.resize(v.len() + count, vec![]),
+            VarVec::U64Vec(v) => v.resize(v.len() + count, vec![]),
+            VarVec::XYVec(v) => v.resize(v.len() + count, None),
+            VarVec::XYZVec(v) => v.resize(v.len() + count, None),
+            VarVec::U32Vec(v) => v.resize(v.len() + count, vec![]),
+            VarVec::Stickers(v) => v.resize(v.len() + count, vec![]),
+            VarVec::InputHistory(v) => v.resize(v.len() + count, vec![]),
         }
     }
 }

@@ -6,12 +6,13 @@ use crate::first_pass::prop_controller::*;
 use crate::parse_demo::DemoOutput;
 use crate::parse_demo::Parser;
 use crate::second_pass::game_events::GameEvent;
-use crate::second_pass::parser_settings::create_huffman_lookup_table;
 use ahash::AHashMap;
 use itertools::Itertools;
 use memmap2::MmapOptions;
 use std::collections::BTreeMap;
 use std::fs::File;
+
+const PARSING_MODE: crate::parse_demo::ParsingMode = crate::parse_demo::ParsingMode::ForceSingleThreaded;
 
 pub fn _create_ge_tests() {
     let wanted_props = vec![
@@ -311,7 +312,6 @@ pub fn _create_ge_tests() {
     ];
 
     let wanted_events = vec!["all".to_string()];
-    let huf = create_huffman_lookup_table();
 
     let settings = ParserInputs {
         wanted_player_props: wanted_props.clone(),
@@ -324,13 +324,11 @@ pub fn _create_ge_tests() {
         wanted_prop_states: AHashMap::default(),
         parse_projectiles: true,
         only_header: false,
-        count_props: false,
         only_convars: false,
-        huffman_lookup_table: &huf,
         order_by_steamid: false,
     };
 
-    let mut ds = Parser::new(settings, crate::parse_demo::ParsingMode::ForceMultiThreaded);
+    let mut ds = Parser::new(settings, PARSING_MODE);
     // ds.is_multithreadable = false;
     let file = File::open("test_demo.dem").unwrap();
     let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
@@ -713,7 +711,6 @@ pub fn _create_tests() {
         "usercmd_left_hand_desired".to_string(),
         "usercmd_input_history".to_string(),
     ];
-    let huf = create_huffman_lookup_table();
 
     let settings = ParserInputs {
         wanted_player_props: wanted_props.clone(),
@@ -726,13 +723,11 @@ pub fn _create_tests() {
         wanted_prop_states: AHashMap::default(),
         parse_projectiles: true,
         only_header: false,
-        count_props: false,
         only_convars: false,
-        huffman_lookup_table: &huf,
         order_by_steamid: false,
     };
 
-    let mut ds = Parser::new(settings, crate::parse_demo::ParsingMode::ForceMultiThreaded);
+    let mut ds = Parser::new(settings, PARSING_MODE);
     let file = File::open("test_demo.dem").unwrap();
     let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
     let d = ds.parse_demo(&mmap).unwrap();
@@ -1099,8 +1094,6 @@ fn create_data() -> (DemoOutput, PropController, BTreeMap<String, Vec<GameEvent>
     ];
 
     let wanted_events = vec![];
-    let huf = create_huffman_lookup_table();
-
     let settings = ParserInputs {
         wanted_player_props: wanted_props.clone(),
         wanted_events,
@@ -1112,20 +1105,16 @@ fn create_data() -> (DemoOutput, PropController, BTreeMap<String, Vec<GameEvent>
         wanted_prop_states: AHashMap::default(),
         parse_projectiles: true,
         only_header: false,
-        count_props: false,
         only_convars: false,
-        huffman_lookup_table: &huf,
         order_by_steamid: false,
     };
 
-    let mut ds = Parser::new(settings, crate::parse_demo::ParsingMode::ForceMultiThreaded);
+    let mut ds = Parser::new(settings, PARSING_MODE);
     let file = File::open("test_demo.dem").unwrap();
     let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
     let out1 = ds.parse_demo(&mmap).unwrap();
 
     let wanted_events = vec!["all".to_string()];
-    let huf = create_huffman_lookup_table();
-
     let settings = ParserInputs {
         wanted_player_props: vec![],
         wanted_events,
@@ -1137,12 +1126,10 @@ fn create_data() -> (DemoOutput, PropController, BTreeMap<String, Vec<GameEvent>
         wanted_prop_states: AHashMap::default(),
         parse_projectiles: true,
         only_header: false,
-        count_props: false,
         only_convars: false,
-        huffman_lookup_table: &huf,
         order_by_steamid: false,
     };
-    let mut ds = Parser::new(settings, crate::parse_demo::ParsingMode::ForceMultiThreaded);
+    let mut ds = Parser::new(settings, PARSING_MODE);
     let file = File::open("test_demo.dem").unwrap();
     let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
     let out2 = ds.parse_demo(&mmap).unwrap();
@@ -1206,6 +1193,7 @@ fn create_data() -> (DemoOutput, PropController, BTreeMap<String, Vec<GameEvent>
 #[cfg(test)]
 mod tests {
     use crate::e2e_test::create_data;
+    use crate::e2e_test::PARSING_MODE;
     use crate::first_pass::parser_settings::ParserInputs;
     use crate::first_pass::prop_controller::PropController;
     use crate::first_pass::prop_controller::PITCH_ID;
@@ -1217,7 +1205,6 @@ mod tests {
     use crate::parse_demo::Parser;
     use crate::second_pass::game_events::EventField;
     use crate::second_pass::game_events::GameEvent;
-    use crate::second_pass::parser_settings::create_huffman_lookup_table;
     use crate::second_pass::variants::PropColumn;
     use crate::second_pass::variants::VarVec;
     use crate::second_pass::variants::VarVec::String;
@@ -1235,9 +1222,6 @@ mod tests {
 
     #[test]
     fn test_parse_ticks_prop_state_filter() {
-        let huf = create_huffman_lookup_table();
-        let huf2 = create_huffman_lookup_table();
-
         let settings = ParserInputs {
             wanted_players: vec![76561198244754626],
             real_name_to_og_name: AHashMap::default(),
@@ -1249,9 +1233,7 @@ mod tests {
             wanted_prop_states: AHashMap::default(),
             parse_projectiles: true,
             only_header: false,
-            count_props: false,
             only_convars: false,
-            huffman_lookup_table: &huf,
             order_by_steamid: false,
         };
 
@@ -1271,14 +1253,12 @@ mod tests {
             wanted_prop_states,
             parse_projectiles: true,
             only_header: false,
-            count_props: false,
             only_convars: false,
-            huffman_lookup_table: &huf2,
             order_by_steamid: false,
         };
 
-        let mut ds = Parser::new(settings, crate::parse_demo::ParsingMode::ForceMultiThreaded);
-        let mut ds_with_filter = Parser::new(settings_with_filter, crate::parse_demo::ParsingMode::ForceMultiThreaded);
+        let mut ds = Parser::new(settings, PARSING_MODE);
+        let mut ds_with_filter = Parser::new(settings_with_filter, PARSING_MODE);
         let file = File::open("test_demo.dem").unwrap();
         let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
         let output = ds.parse_demo(&mmap).unwrap();
@@ -1338,8 +1318,6 @@ mod tests {
 
     #[test]
     fn test_player_filter() {
-        let huf = create_huffman_lookup_table();
-
         let settings = ParserInputs {
             wanted_players: vec![76561198244754626],
             real_name_to_og_name: AHashMap::default(),
@@ -1351,13 +1329,11 @@ mod tests {
             wanted_prop_states: AHashMap::default(),
             parse_projectiles: true,
             only_header: false,
-            count_props: false,
             only_convars: false,
-            huffman_lookup_table: &huf,
             order_by_steamid: false,
         };
 
-        let mut ds = Parser::new(settings, crate::parse_demo::ParsingMode::ForceMultiThreaded);
+        let mut ds = Parser::new(settings, PARSING_MODE);
         let file = File::open("test_demo.dem").unwrap();
         let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
         let output = ds.parse_demo(&mmap).unwrap();
@@ -1680,8 +1656,6 @@ mod tests {
                     None,
                     Some(0),
                     None,
-                    None,
-                    None,
                     Some(0),
                     Some(0),
                     Some(0),
@@ -1689,7 +1663,9 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
+                    Some(0),
+                    Some(0),
                     Some(0),
                     Some(0),
                 ])),
@@ -1792,8 +1768,8 @@ mod tests {
                     None,
                     Some(0.0),
                     None,
-                    None,
-                    None,
+                    Some(0.0),
+                    Some(0.0),
                     Some(645.8594),
                     Some(693.40625),
                     Some(0.0),
@@ -1801,7 +1777,7 @@ mod tests {
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
-                    None,
+                    Some(0.0),
                     Some(0.0),
                     Some(0.0),
                 ])),
@@ -1846,7 +1822,7 @@ mod tests {
                     Some(0),
                     None,
                     Some(4),
-                    None,
+                    Some(9),
                     Some(0),
                     Some(4),
                     Some(0),
@@ -1854,7 +1830,7 @@ mod tests {
                     Some(0),
                     Some(9),
                     Some(3),
-                    None,
+                    Some(0),
                     Some(4),
                     Some(3),
                 ])),
@@ -2064,8 +2040,6 @@ mod tests {
                     None,
                     Some([0.0, 0.0, 0.0]),
                     None,
-                    None,
-                    None,
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
@@ -2073,7 +2047,9 @@ mod tests {
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
-                    None,
+                    Some([0.0, 0.0, 0.0]),
+                    Some([0.0, 0.0, 0.0]),
+                    Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                 ])),
@@ -2188,7 +2164,7 @@ mod tests {
                     Some(2),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(2),
                     Some(0),
                     Some(0),
                 ])),
@@ -2868,8 +2844,6 @@ mod tests {
                     None,
                     Some(32),
                     None,
-                    None,
-                    None,
                     Some(32),
                     Some(32),
                     Some(32),
@@ -2877,7 +2851,9 @@ mod tests {
                     Some(32),
                     Some(32),
                     Some(32),
-                    None,
+                    Some(32),
+                    Some(32),
+                    Some(32),
                     Some(32),
                     Some(32),
                 ])),
@@ -2942,7 +2918,54 @@ mod tests {
     }
     #[test]
     fn velocity_Y() {
-        let prop = ("velocity_Y", PropColumn { data: None, num_nones: 40 });
+        let prop = (
+            "velocity_Y",
+            PropColumn {
+                data: Some(F32(vec![
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(-53.945313),
+                    Some(79.828125),
+                    Some(54.46875),
+                    Some(-0.71484375),
+                    Some(0.0),
+                    Some(-23.046875),
+                    Some(53.53125),
+                    Some(0.0),
+                    Some(-79.6875),
+                    Some(-49.492188),
+                    Some(-40.195313),
+                    Some(-68.35156),
+                    Some(0.0),
+                    Some(-20.929688),
+                    Some(-167.50781),
+                    Some(0.0),
+                    Some(-65.90625),
+                    Some(0.0),
+                    Some(83.46875),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                ])),
+                num_nones: 0,
+            },
+        );
         assert_eq!(out.0.df[&VELOCITY_Y_ID], prop.1);
     }
     #[test]
@@ -3266,7 +3289,54 @@ mod tests {
     }
     #[test]
     fn velocity() {
-        let prop = ("velocity", PropColumn { data: None, num_nones: 40 });
+        let prop = (
+            "velocity",
+            PropColumn {
+                data: Some(F32(vec![
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(111.79799),
+                    Some(236.48987),
+                    Some(105.49331),
+                    Some(0.71953505),
+                    Some(0.0),
+                    Some(28.424265),
+                    Some(53.976913),
+                    Some(0.0),
+                    Some(113.61866),
+                    Some(59.91102),
+                    Some(214.81366),
+                    Some(170.1669),
+                    Some(0.0),
+                    Some(25.16953),
+                    Some(222.42543),
+                    Some(0.0),
+                    Some(77.67221),
+                    Some(0.0),
+                    Some(84.031975),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                ])),
+                num_nones: 0,
+            },
+        );
         assert_eq!(out.0.df[&VELOCITY_ID], prop.1);
     }
     #[test]
@@ -3471,7 +3541,7 @@ mod tests {
                     Some(0),
                     Some(13),
                     Some(0),
-                    None,
+                    Some(0),
                     Some(12),
                     Some(0),
                 ])),
@@ -3524,7 +3594,7 @@ mod tests {
                     Some(0),
                     Some(259),
                     Some(67),
-                    None,
+                    Some(0),
                     Some(0),
                     Some(1),
                 ])),
@@ -3629,7 +3699,7 @@ mod tests {
                     Some(15466622),
                     Some(16089222),
                     Some(9863309),
-                    None,
+                    Some(14352543),
                     Some(6389962),
                     Some(2998498),
                 ])),
@@ -3788,7 +3858,7 @@ mod tests {
                     Some(702021758),
                     Some(4025155718),
                     Some(3006070925),
-                    None,
+                    Some(3048603807),
                     Some(3535995082),
                     Some(576422114),
                 ])),
@@ -4097,8 +4167,8 @@ mod tests {
                     None,
                     Some(16777215),
                     None,
-                    None,
-                    None,
+                    Some(16777215),
+                    Some(16777215),
                     Some(9863309),
                     Some(15466622),
                     Some(16777215),
@@ -4106,7 +4176,7 @@ mod tests {
                     Some(16777215),
                     Some(16777215),
                     Some(16777215),
-                    None,
+                    Some(16777215),
                     Some(16777215),
                     Some(16777215),
                 ])),
@@ -4150,8 +4220,6 @@ mod tests {
                     None,
                     Some(17825793),
                     None,
-                    None,
-                    None,
                     Some(17825793),
                     Some(17825793),
                     Some(17825793),
@@ -4159,7 +4227,9 @@ mod tests {
                     Some(17825793),
                     Some(17825793),
                     Some(17825793),
-                    None,
+                    Some(17825793),
+                    Some(17825793),
+                    Some(17825793),
                     Some(17825793),
                     Some(17825793),
                 ])),
@@ -4318,7 +4388,7 @@ mod tests {
                     Some(234429022),
                     Some(112783799),
                     Some(297778383),
-                    None,
+                    Some(3754702),
                     Some(320710059),
                     Some(242088265),
                 ])),
@@ -4415,7 +4485,7 @@ mod tests {
                     None,
                     Some(0),
                     None,
-                    None,
+                    Some(0),
                     Some(0),
                     Some(0),
                     Some(1),
@@ -4424,7 +4494,7 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
                     Some(1),
                     Some(0),
                 ])),
@@ -4627,8 +4697,6 @@ mod tests {
                     None,
                     Some(false),
                     None,
-                    None,
-                    None,
                     Some(false),
                     Some(false),
                     Some(false),
@@ -4636,7 +4704,9 @@ mod tests {
                     Some(false),
                     Some(false),
                     Some(false),
-                    None,
+                    Some(false),
+                    Some(false),
+                    Some(false),
                     Some(false),
                     Some(false),
                 ])),
@@ -4945,8 +5015,6 @@ mod tests {
                     None,
                     Some([0.0, 0.0, 0.0]),
                     None,
-                    None,
-                    None,
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
@@ -4954,7 +5022,9 @@ mod tests {
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
-                    None,
+                    Some([0.0, 0.0, 0.0]),
+                    Some([0.0, 0.0, 0.0]),
+                    Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                 ])),
@@ -5019,7 +5089,54 @@ mod tests {
     }
     #[test]
     fn velocity_X() {
-        let prop = ("velocity_X", PropColumn { data: None, num_nones: 40 });
+        let prop = (
+            "velocity_X",
+            PropColumn {
+                data: Some(F32(vec![
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(-97.921875),
+                    Some(222.60938),
+                    Some(90.34375),
+                    Some(0.08203125),
+                    Some(0.0),
+                    Some(16.636719),
+                    Some(6.921875),
+                    Some(0.0),
+                    Some(-80.98828),
+                    Some(33.76172),
+                    Some(211.01953),
+                    Some(155.83594),
+                    Some(0.0),
+                    Some(-13.980469),
+                    Some(146.33594),
+                    Some(0.0),
+                    Some(41.101563),
+                    Some(0.0),
+                    Some(-9.712891),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                ])),
+                num_nones: 0,
+            },
+        );
         assert_eq!(out.0.df[&VELOCITY_X_ID], prop.1);
     }
     #[test]
@@ -5065,7 +5182,7 @@ mod tests {
                     Some(0.0),
                     Some(0.0049),
                     Some(0.0),
-                    None,
+                    Some(0.0),
                     Some(0.0049),
                     Some(0.0),
                 ])),
@@ -5587,7 +5704,7 @@ mod tests {
                     None,
                     None,
                     Some(8),
-                    None,
+                    Some(125),
                     None,
                     Some(75),
                     None,
@@ -6604,8 +6721,6 @@ mod tests {
                     None,
                     Some(32),
                     None,
-                    None,
-                    None,
                     Some(32),
                     Some(32),
                     Some(32),
@@ -6613,7 +6728,9 @@ mod tests {
                     Some(32),
                     Some(32),
                     Some(32),
-                    None,
+                    Some(32),
+                    Some(32),
+                    Some(32),
                     Some(32),
                     Some(32),
                 ])),
@@ -6667,7 +6784,7 @@ mod tests {
                     Some(0),
                     Some(112783799),
                     Some(297778383),
-                    None,
+                    Some(0),
                     Some(1),
                     Some(242088265),
                 ])),
@@ -7028,8 +7145,6 @@ mod tests {
                     None,
                     Some(3),
                     None,
-                    None,
-                    None,
                     Some(3),
                     Some(3),
                     Some(3),
@@ -7037,7 +7152,9 @@ mod tests {
                     Some(3),
                     Some(3),
                     Some(3),
-                    None,
+                    Some(3),
+                    Some(3),
+                    Some(3),
                     Some(3),
                     Some(3),
                 ])),
@@ -7081,8 +7198,6 @@ mod tests {
                     None,
                     Some(0.0),
                     None,
-                    None,
-                    None,
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
@@ -7090,7 +7205,9 @@ mod tests {
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
-                    None,
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
                     Some(0.0),
                     Some(0.0),
                 ])),
@@ -7196,7 +7313,7 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
                     Some(0),
                     Some(5),
                 ])),
@@ -7294,7 +7411,7 @@ mod tests {
                     Some(18446744073709551615),
                     None,
                     Some(2),
-                    None,
+                    Some(2),
                     Some(18446744073709551615),
                     Some(2),
                     Some(1),
@@ -7302,7 +7419,7 @@ mod tests {
                     Some(18446744073709551615),
                     Some(2),
                     Some(18446744073709551615),
-                    None,
+                    Some(18446744073709551615),
                     Some(1),
                     Some(18446744073709551615),
                 ])),
@@ -9434,7 +9551,7 @@ mod tests {
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
-                    None,
+                    Some(0.0),
                     Some(0.0),
                     Some(623.8281),
                 ])),
@@ -9637,8 +9754,8 @@ mod tests {
                     None,
                     Some(1),
                     None,
-                    None,
-                    None,
+                    Some(1),
+                    Some(1),
                     Some(1),
                     Some(1),
                     Some(1),
@@ -10243,7 +10360,7 @@ mod tests {
                     Some(0),
                     Some(903512841),
                     Some(854287206),
-                    None,
+                    Some(0),
                     Some(0),
                     Some(2526560054),
                 ])),
@@ -10325,13 +10442,14 @@ mod tests {
                         "Flashbang".to_string(),
                     ],
                     vec![],
-                    vec!["knife".to_string()],
-                    vec!["knife_tactical".to_string(), "Smoke Grenade".to_string(), "Flashbang".to_string()],
+                    vec!["knife".to_string(), "P250".to_string()],
+                    vec!["knife_tactical".to_string(), "SSG 08".to_string(), "P250".to_string(), "Smoke Grenade".to_string(), "Flashbang".to_string()],
                     vec![
                         "knife_t".to_string(),
                         "Glock-18".to_string(),
                         "AK-47".to_string(),
                         "Smoke Grenade".to_string(),
+                        "Molotov".to_string(),
                         "Flashbang".to_string(),
                     ],
                     vec!["knife_survival_bowie".to_string(), "USP-S".to_string(), "M4A1-S".to_string()],
@@ -10340,6 +10458,7 @@ mod tests {
                         "knife_t".to_string(),
                         "Glock-18".to_string(),
                         "AK-47".to_string(),
+                        "Molotov".to_string(),
                         "High Explosive Grenade".to_string(),
                         "Smoke Grenade".to_string(),
                         "Flashbang".to_string(),
@@ -10356,8 +10475,10 @@ mod tests {
                     vec![
                         "knife_t".to_string(),
                         "Glock-18".to_string(),
+                        "C4".to_string(),
                         "AWP".to_string(),
                         "Smoke Grenade".to_string(),
+                        "Molotov".to_string(),
                         "High Explosive Grenade".to_string(),
                     ],
                     vec!["knife".to_string(), "USP-S".to_string()],
@@ -10366,6 +10487,7 @@ mod tests {
                         "AK-47".to_string(),
                         "R8 Revolver".to_string(),
                         "High Explosive Grenade".to_string(),
+                        "Molotov".to_string(),
                         "Smoke Grenade".to_string(),
                         "Flashbang".to_string(),
                     ],
@@ -10463,7 +10585,7 @@ mod tests {
                     None,
                     None,
                     Some(false),
-                    None,
+                    Some(false),
                     None,
                     Some(false),
                     None,
@@ -10568,8 +10690,6 @@ mod tests {
                     None,
                     Some(32),
                     None,
-                    None,
-                    None,
                     Some(32),
                     Some(32),
                     Some(32),
@@ -10577,7 +10697,9 @@ mod tests {
                     Some(32),
                     Some(32),
                     Some(32),
-                    None,
+                    Some(32),
+                    Some(32),
+                    Some(32),
                     Some(32),
                     Some(32),
                 ])),
@@ -10992,8 +11114,6 @@ mod tests {
                     None,
                     Some(0),
                     None,
-                    None,
-                    None,
                     Some(0),
                     Some(0),
                     Some(0),
@@ -11001,7 +11121,9 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
+                    Some(0),
+                    Some(0),
                     Some(0),
                     Some(0),
                 ])),
@@ -11259,7 +11381,7 @@ mod tests {
                     None,
                     None,
                     Some(0),
-                    None,
+                    Some(0),
                     None,
                     Some(0),
                     None,
@@ -11311,8 +11433,6 @@ mod tests {
                     None,
                     Some(0.0),
                     None,
-                    None,
-                    None,
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
@@ -11320,7 +11440,9 @@ mod tests {
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
-                    None,
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
                     Some(0.0),
                     Some(0.0),
                 ])),
@@ -11523,8 +11645,8 @@ mod tests {
                     None,
                     Some(2),
                     None,
-                    None,
-                    None,
+                    Some(2),
+                    Some(2),
                     Some(3),
                     Some(3),
                     Some(2),
@@ -11532,7 +11654,7 @@ mod tests {
                     Some(2),
                     Some(2),
                     Some(2),
-                    None,
+                    Some(2),
                     Some(2),
                     Some(2),
                 ])),
@@ -11741,8 +11863,6 @@ mod tests {
                     None,
                     Some([0.0, 0.0, 0.0]),
                     None,
-                    None,
-                    None,
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
@@ -11750,7 +11870,9 @@ mod tests {
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
-                    None,
+                    Some([0.0, 0.0, 0.0]),
+                    Some([0.0, 0.0, 0.0]),
+                    Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                     Some([0.0, 0.0, 0.0]),
                 ])),
@@ -11900,8 +12022,6 @@ mod tests {
                     None,
                     Some(131265),
                     None,
-                    None,
-                    None,
                     Some(131265),
                     Some(131265),
                     Some(131265),
@@ -11909,7 +12029,9 @@ mod tests {
                     Some(131265),
                     Some(131265),
                     Some(131265),
-                    None,
+                    Some(131265),
+                    Some(131265),
+                    Some(131265),
                     Some(131265),
                     Some(131265),
                 ])),
@@ -11953,7 +12075,7 @@ mod tests {
                     None,
                     Some(false),
                     None,
-                    None,
+                    Some(false),
                     Some(true),
                     Some(false),
                     Some(false),
@@ -11962,7 +12084,7 @@ mod tests {
                     Some(false),
                     Some(false),
                     Some(false),
-                    None,
+                    Some(false),
                     Some(false),
                     Some(false),
                 ])),
@@ -12015,7 +12137,7 @@ mod tests {
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
-                    None,
+                    Some(0.0),
                     Some(0.0),
                     Some(0.033517454),
                 ])),
@@ -12068,7 +12190,7 @@ mod tests {
                     Some(126),
                     Some(134),
                     Some(141),
-                    None,
+                    Some(159),
                     Some(202),
                     Some(226),
                 ])),
@@ -12165,8 +12287,6 @@ mod tests {
                     None,
                     Some(0),
                     None,
-                    None,
-                    None,
                     Some(0),
                     Some(0),
                     Some(0),
@@ -12174,7 +12294,9 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
+                    Some(0),
+                    Some(0),
                     Some(0),
                     Some(0),
                 ])),
@@ -12604,7 +12726,7 @@ mod tests {
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
-                    None,
+                    Some(0.0),
                     Some(0.0),
                     Some(0.0),
                 ])),
@@ -12809,7 +12931,7 @@ mod tests {
                     Some(0),
                     None,
                     Some(8),
-                    None,
+                    Some(5),
                     Some(0),
                     Some(7),
                     Some(0),
@@ -12817,7 +12939,7 @@ mod tests {
                     Some(0),
                     Some(8),
                     Some(8),
-                    None,
+                    Some(0),
                     Some(0),
                     Some(7),
                 ])),
@@ -12967,8 +13089,6 @@ mod tests {
                     None,
                     Some(0),
                     None,
-                    None,
-                    None,
                     Some(0),
                     Some(0),
                     Some(0),
@@ -12976,7 +13096,9 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
+                    Some(0),
+                    Some(0),
                     Some(0),
                     Some(0),
                 ])),
@@ -13178,8 +13300,6 @@ mod tests {
                     None,
                     Some(false),
                     None,
-                    None,
-                    None,
                     Some(false),
                     Some(false),
                     Some(false),
@@ -13187,7 +13307,9 @@ mod tests {
                     Some(false),
                     Some(false),
                     Some(false),
-                    None,
+                    Some(false),
+                    Some(false),
+                    Some(false),
                     Some(false),
                     Some(false),
                 ])),
@@ -13343,18 +13465,18 @@ mod tests {
                     vec![],
                     vec![508, 61, 60, 43],
                     vec![],
-                    vec![42],
-                    vec![509, 45, 43],
-                    vec![59, 4, 7, 45, 43],
+                    vec![42, 36],
+                    vec![509, 40, 36, 45, 43],
+                    vec![59, 4, 7, 45, 46, 43],
                     vec![514, 61, 60],
                     vec![59, 4, 7],
-                    vec![59, 4, 7, 44, 45, 43],
+                    vec![59, 4, 7, 46, 44, 45, 43],
                     vec![42, 61],
                     vec![42, 32, 45, 44, 48],
                     vec![508, 61],
-                    vec![59, 4, 9, 45, 44],
+                    vec![59, 4, 49, 9, 45, 46, 44],
                     vec![42, 61],
-                    vec![509, 7, 64, 44, 45, 43],
+                    vec![509, 7, 64, 44, 46, 45, 43],
                 ])),
                 num_nones: 0,
             },
@@ -13766,8 +13888,8 @@ mod tests {
                     None,
                     Some(0),
                     None,
-                    None,
-                    None,
+                    Some(0),
+                    Some(0),
                     Some(1),
                     Some(0),
                     Some(0),
@@ -13775,7 +13897,7 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
                     Some(0),
                     Some(0),
                 ])),
@@ -14199,7 +14321,7 @@ mod tests {
                     Some(15466622),
                     Some(16089222),
                     Some(9863309),
-                    None,
+                    Some(14352543),
                     Some(6389962),
                     Some(2998498),
                 ])),
@@ -14296,8 +14418,8 @@ mod tests {
                     None,
                     Some("Flashbang".to_string()),
                     None,
-                    None,
-                    None,
+                    Some("P250".to_string()),
+                    Some("SSG 08".to_string()),
                     Some("Smoke Grenade".to_string()),
                     Some("M4A1-S".to_string()),
                     Some("AK-47".to_string()),
@@ -14305,7 +14427,7 @@ mod tests {
                     Some("knife".to_string()),
                     Some("P2000".to_string()),
                     Some("knife_m9_bayonet".to_string()),
-                    None,
+                    Some("C4".to_string()),
                     Some("USP-S".to_string()),
                     Some("knife_tactical".to_string()),
                 ])),
@@ -14316,7 +14438,54 @@ mod tests {
     }
     #[test]
     fn velocity_Z() {
-        let prop = ("velocity_Z", PropColumn { data: None, num_nones: 40 });
+        let prop = (
+            "velocity_Z",
+            PropColumn {
+                data: Some(F32(vec![
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(-103.890625),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(198.76563),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0)
+                ])),
+                num_nones: 0
+            },
+        );
         assert_eq!(out.0.df[&VELOCITY_Z_ID], prop.1);
     }
     #[test]
@@ -14776,8 +14945,6 @@ mod tests {
                     None,
                     Some(0.0),
                     None,
-                    None,
-                    None,
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
@@ -14785,7 +14952,9 @@ mod tests {
                     Some(0.0),
                     Some(0.0),
                     Some(0.0),
-                    None,
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
                     Some(0.0),
                     Some(0.0),
                 ])),
@@ -14934,8 +15103,6 @@ mod tests {
                     None,
                     Some(32),
                     None,
-                    None,
-                    None,
                     Some(32),
                     Some(32),
                     Some(32),
@@ -14943,7 +15110,9 @@ mod tests {
                     Some(32),
                     Some(32),
                     Some(32),
-                    None,
+                    Some(32),
+                    Some(32),
+                    Some(32),
                     Some(32),
                     Some(32),
                 ])),
@@ -15310,8 +15479,8 @@ mod tests {
                     None,
                     Some(0),
                     None,
-                    None,
-                    None,
+                    Some(0),
+                    Some(0),
                     Some(82670),
                     Some(88756),
                     Some(0),
@@ -15319,7 +15488,7 @@ mod tests {
                     Some(0),
                     Some(0),
                     Some(0),
-                    None,
+                    Some(0),
                     Some(0),
                     Some(0),
                 ])),

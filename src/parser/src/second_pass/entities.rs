@@ -1,6 +1,3 @@
-#![allow(clippy::unnecessary_lazy_evaluations)]
-
-use crate::definitions::Class;
 use crate::definitions::DemoParserError;
 use crate::first_pass::prop_controller::PropController;
 use crate::first_pass::prop_controller::FLATTENED_VEC_MAX_LEN;
@@ -9,17 +6,16 @@ use crate::first_pass::prop_controller::ITEM_PURCHASE_COUNT;
 use crate::first_pass::prop_controller::ITEM_PURCHASE_DEF_IDX;
 use crate::first_pass::prop_controller::ITEM_PURCHASE_HANDLE;
 use crate::first_pass::read_bits::Bitreader;
-use crate::first_pass::sendtables::find_field;
-use crate::first_pass::sendtables::get_propinfo;
 use crate::first_pass::sendtables::Field;
 use crate::first_pass::sendtables::FieldInfo;
 use crate::second_pass::game_events::GameEventInfo;
 use crate::second_pass::game_events::RoundEnd;
 use crate::second_pass::game_events::RoundWinReason;
+use crate::second_pass::huffman_table::HUFFMAN_TREE;
 use crate::second_pass::parser_settings::SecondPassParser;
-use crate::second_pass::path_ops::*;
+use crate::second_pass::path_ops::FieldPath;
 use crate::second_pass::variants::Variant;
-use ahash::AHashMap;
+use nohash::IntMap;
 use csgoproto::CsvcMsgPacketEntities;
 use prost::Message;
 
@@ -31,7 +27,7 @@ const HUFFMAN_CODE_MAXLEN: u32 = 17;
 pub struct Entity {
     pub cls_id: u32,
     pub entity_id: i32,
-    pub props: AHashMap<u32, Variant>,
+    pub props: IntMap<u32, Variant>,
     pub entity_type: EntityType,
 }
 
@@ -80,7 +76,7 @@ impl<'a> SecondPassParser<'a> {
                 },
                 // Update
                 0b00 => {
-                    // Most entities pass trough here. Seems like entities that are not updated.
+                    // Most entities pass through here. Seems like entities that are not updated.
                     if msg.has_pvs_vis_bits() > 0 && bitreader.read_nbits(2)? & 0x01 == 1 {
                         continue;
                     }
@@ -104,13 +100,16 @@ impl<'a> SecondPassParser<'a> {
         is_fullpacket: bool,
     ) -> Result<(), DemoParserError> {
         let n_updates = self.parse_paths(bitreader)?;
-        let n_updated_values = self.decode_entity_update(bitreader, entity_id, n_updates, is_fullpacket, is_baseline, events_to_emit)?;
-        if n_updated_values > 0 {
-            self.gather_extra_info(&entity_id, is_baseline)?;
+        if n_updates == 0 {
+            return Ok(())
         }
-        Ok(())
+
+        let extract_event = !is_fullpacket && !is_baseline;
+        self.decode_entity_update(bitreader, entity_id, n_updates, extract_event, events_to_emit)?;
+        self.gather_extra_info(&entity_id, is_baseline)
     }
 
+    #[inline(never)]
     fn parse_paths(&mut self, bitreader: &mut Bitreader) -> Result<usize, DemoParserError> {
         /*
         Create a field path by decoding using a Huffman tree.
@@ -181,7 +180,7 @@ impl<'a> SecondPassParser<'a> {
 
         // Create an "empty" path ([-1, 0, 0, 0, 0, 0, 0])
         // For perfomance reasons have them always the same len
-        let mut fp = FieldPath::default();
+        let mut field_path = FieldPath::default();
         let mut idx = 0;
 
         // Do huffman decoding with a lookup table instead of reading one bit at a time
@@ -195,40 +194,40 @@ impl<'a> SecondPassParser<'a> {
             }
 
             let peeked_bits = bitreader.peek(HUFFMAN_CODE_MAXLEN) as usize;
-            let (symbol, code_len) = self.huffman_lookup_table[peeked_bits];
+            let (symbol, code_len) = HUFFMAN_TREE[peeked_bits];
             bitreader.consume(code_len as u32);
             if symbol == STOP_READING_SYMBOL {
                 break;
             }
-            do_op(symbol, bitreader, &mut fp)?;
-            self.write_fp(&mut fp, idx)?;
+            field_path.do_op(symbol, bitreader)?;
+            self.write_fp(&mut field_path, idx)?;
             idx += 1;
         }
         Ok(idx)
     }
 
+    #[inline(never)]
     fn decode_entity_update(
         &mut self,
         bitreader: &mut Bitreader,
         entity_id: i32,
         n_updates: usize,
-        is_fullpacket: bool,
-        is_baseline: bool,
+        extract_event: bool,
         events_to_emit: &mut Vec<GameEventInfo>,
-    ) -> Result<usize, DemoParserError> {
+    ) -> Result<(), DemoParserError> {
         let Some(Some(entity)) = self.entities.get_mut(entity_id as usize) else {
             return Err(DemoParserError::EntityNotFound)
         };
-        let class = self.cls_by_id.get(entity.cls_id as usize).ok_or_else(|| DemoParserError::ClassNotFound)?;
+        let serializer = self.serializer_by_cls_id.get(entity.cls_id as usize).ok_or_else(|| DemoParserError::ClassNotFound)?;
 
         for path in self.paths.iter().take(n_updates) {
-            let field = find_field(path, &class.serializer)?;
-            let field_info = get_propinfo(field, path);
+            let field = serializer.get_field(path)?;
             let decoder = field.get_decoder()?;
             let result = bitreader.decode(&decoder, self.qf_mapper)?;
+            let Some(field_info) = field.get_field_info(path) else { continue };
 
-            if !is_fullpacket && !is_baseline {
-                if let Some(event) = SecondPassParser::extract_event(entity, &result, field_info, self.prop_controller) {
+            if extract_event {
+                if let Some(event) = SecondPassParser::extract_event(entity, &result, field_info.prop_id, self.prop_controller) {
                     events_to_emit.push(event);
                 }
             }
@@ -239,9 +238,8 @@ impl<'a> SecondPassParser<'a> {
                     self.tick,
                     field_info,
                     path,
-                    is_fullpacket,
-                    is_baseline,
-                    class,
+                    extract_event,
+                    // class,
                     &entity.cls_id,
                     &entity_id,
                 );
@@ -249,18 +247,16 @@ impl<'a> SecondPassParser<'a> {
 
             SecondPassParser::insert_field(entity, result, field_info);
         }
-        Ok(n_updates)
+        Ok(())
     }
 
     fn extract_event(
-        entity: &mut Entity,
+        entity: &Entity,
         result: &Variant,
-        field_info: Option<FieldInfo>,
+        prop_id: u32,
         prop_controller: &PropController,
     ) -> Option<GameEventInfo> {
         // Might want to start splitting this function
-        let prop_id = field_info?.prop_id;
-
         if prop_controller.special_ids.round_end_count.is_some_and(|id| prop_id == id) {
             return Some(GameEventInfo::RoundEnd(RoundEnd {
                 old_value: entity.props.get(&prop_id).cloned(),
@@ -310,38 +306,35 @@ impl<'a> SecondPassParser<'a> {
         _result: &Variant,
         field: &Field,
         _tick: i32,
-        field_info: Option<FieldInfo>,
+        _field_info: FieldInfo,
         _path: &FieldPath,
-        _is_fullpacket: bool,
-        _is_baseline: bool,
-        _cls: &Class,
+        _extract_event: bool,
+        // _cls: &Class,
         _cls_id: &u32,
         _entity_id: &i32,
     ) {
         if let Field::Value(_v) = field {
-            if _v.full_name.contains("Services") {
-                println!("{:?} {:?} {:?} {:?}", _path, field_info, _v.full_name, _result);
-            }
+            // if _v.full_name.contains("Services") {
+            //     println!("{:?} {:?} {:?} {:?}", _path, field_info, _v.full_name, _result);
+            // }
         }
     }
 
-    fn insert_field(entity: &mut Entity, result: Variant, field_info: Option<FieldInfo>) {
-        if let Some(fi) = field_info {
-            if fi.should_parse {
-                entity.props.insert(fi.prop_id, result);
-            }
+    fn insert_field(entity: &mut Entity, result: Variant, field_info: FieldInfo) {
+        if field_info.should_parse {
+            entity.props.insert(field_info.prop_id, result);
         }
     }
 
     #[inline]
-    fn write_fp(&mut self, fp_src: &mut FieldPath, idx: usize) -> Result<(), DemoParserError> {
+    fn write_fp(&mut self, field_path: &mut FieldPath, idx: usize) -> Result<(), DemoParserError> {
         match self.paths.get_mut(idx) {
-            Some(entry) => *entry = *fp_src,
+            Some(entry) => *entry = *field_path,
             // need to extend vec (rare)
             None => {
                 self.paths.resize_with(idx + 1, FieldPath::default);
                 let entry = self.paths.get_mut(idx).ok_or_else(|| DemoParserError::VectorResizeFailure)?;
-                *entry = *fp_src;
+                *entry = *field_path;
             }
         }
         Ok(())
@@ -365,7 +358,7 @@ impl<'a> SecondPassParser<'a> {
 
         if self.entities.len() as i32 <= entity_id {
             // if corrupt, this can cause oom allocations
-            if entity_id > 100000 {
+            if entity_id > 100_000 {
                 return Err(DemoParserError::VectorResizeFailure);
             }
             self.entities.resize(entity_id as usize + 1, None);
@@ -375,7 +368,7 @@ impl<'a> SecondPassParser<'a> {
         let entity = Entity {
             entity_id,
             cls_id,
-            props: AHashMap::with_capacity(0),
+            props: IntMap::default(),
             entity_type,
         };
         *entry = Some(entity);
@@ -390,14 +383,14 @@ impl<'a> SecondPassParser<'a> {
     }
 
     fn check_entity_type(&self, cls_id: u32) -> Result<EntityType, DemoParserError> {
-        let class = self.cls_by_id.get(cls_id as usize).ok_or_else(|| DemoParserError::ClassNotFound)?;
-        match class.name.as_str() {
+        let serializer = self.serializer_by_cls_id.get(cls_id as usize).ok_or_else(|| DemoParserError::ClassNotFound)?;
+        match serializer.name.as_str() {
             "CCSPlayerController" => Ok(EntityType::PlayerController),
             "CCSGameRulesProxy" => Ok(EntityType::Rules),
             "CCSTeam" => Ok(EntityType::Team),
             "CC4" => Ok(EntityType::C4),
             _ => {
-                if class.name.contains("Projectile") || class.name == "CIncendiaryGrenade" {
+                if serializer.name.contains("Projectile") || serializer.name == "CIncendiaryGrenade" {
                     return Ok(EntityType::Projectile);
                 }
                 Ok(EntityType::Normal)

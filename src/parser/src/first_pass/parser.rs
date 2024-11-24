@@ -1,6 +1,3 @@
-#![allow(clippy::unnecessary_lazy_evaluations)]
-
-use crate::definitions::Class;
 use crate::definitions::DemoParserError;
 use crate::definitions::HEADER_ENDS_AT_BYTE;
 use crate::definitions::INNER_BUF_DEFAULT_LEN;
@@ -8,17 +5,15 @@ use crate::first_pass::fallbackbytes::GAME_EVENT_LIST_FALLBACK_BYTES;
 use crate::first_pass::frameparser::Frame;
 use crate::first_pass::frameparser::FrameParser;
 use crate::first_pass::parser_settings::FirstPassParser;
-use crate::first_pass::parser_settings::ParserInputs;
 use crate::first_pass::prop_controller::PropController;
 use crate::first_pass::read_bits::Bitreader;
 use crate::first_pass::sendtables::Serializer;
 use crate::first_pass::stringtables::StringTable;
 use crate::first_pass::stringtables::UserInfo;
-use crate::maps::netmessage_type_from_int;
-use crate::maps::NetmessageType::*;
 use crate::second_pass::decoder::QfMapper;
 use ahash::AHashMap;
-use ahash::AHashSet;
+use csgoproto::message_type::NetMessageType;
+use csgoproto::message_type::NetMessageType::*;
 use csgoproto::CDemoFullPacket;
 use csgoproto::CDemoPacket;
 use csgoproto::CDemoSendTables;
@@ -27,40 +22,38 @@ use csgoproto::CDemoClassInfo;
 use csgoproto::CDemoFileHeader;
 use csgoproto::csvc_msg_game_event_list::DescriptorT;
 use csgoproto::CsvcMsgGameEventList;
+use nohash::IntMap;
+use nohash::IntSet;
 use prost::Message;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct FirstPassOutput<'a> {
-    pub fullpacket_offsets: Vec<usize>,
-    pub settings: &'a ParserInputs<'a>,
+pub struct FirstPassOutput {
+    pub added_temp_props: Vec<String>,
     pub baselines: AHashMap<u32, Vec<u8>>,
-    pub prop_controller: &'a PropController,
-    pub cls_by_id: &'a Vec<Class>,
-    pub qfmap: &'a QfMapper,
-    pub ge_list: &'a AHashMap<i32, DescriptorT>,
-    pub wanted_ticks: AHashSet<i32>,
+    pub fullpackets: IntMap<usize, Option<CDemoPacket>>,
+    pub ge_list: AHashMap<i32, DescriptorT>,
+    pub header: AHashMap<String, String>,
+    pub prop_controller: PropController,
+    pub qfmap: QfMapper,
+    pub serializer_by_cls_id: Vec<Serializer>,
     pub string_tables: Vec<StringTable>,
     pub stringtable_players: BTreeMap<i32, UserInfo>,
-    pub added_temp_props: Vec<String>,
-    pub wanted_players: AHashSet<u64>,
-    pub header: AHashMap<String, String>,
-    pub order_by_steamid: bool,
+    pub wanted_players: IntSet<u64>,
+    pub wanted_ticks: IntSet<i32>,
 }
 
 impl<'a> FirstPassParser<'a> {
-    pub fn parse_demo(&mut self, demo_bytes: &'a [u8], exit_early: bool) -> Result<FirstPassOutput, DemoParserError> {
+    pub fn parse_demo(&mut self, demo_bytes: &'a [u8]) -> Result<(), DemoParserError> {
         self.handle_short_header(demo_bytes)?;
-        let mut reuseable_buffer = vec![0_u8; INNER_BUF_DEFAULT_LEN];
-        // Loop that goes trough the entire file
-        loop {
-            if exit_early && self.cls_by_id.is_some() && !self.ge_list.is_empty() {
-                break;
-            }
 
-            let frame = FrameParser::read_frame(demo_bytes, &mut self.ptr)?;
-            self.tick = frame.tick;
+        let mut reuseable_buffer = vec![0_u8; INNER_BUF_DEFAULT_LEN];
+        let mut ptr = HEADER_ENDS_AT_BYTE;
+        let max_ptr_value = demo_bytes.len();
+
+        // Loop that goes through the entire file
+        while ptr < max_ptr_value {
+            let frame = FrameParser::read_frame(demo_bytes, &mut ptr)?;
             if frame.demo_cmd == DemStop {
                 break;
             }
@@ -79,8 +72,7 @@ impl<'a> FirstPassParser<'a> {
                 _ => {}
             };
         }
-        self.fallback_if_first_pass_missing_data()?;
-        self.create_first_pass_output()
+        self.fallback_if_first_pass_missing_data()
     }
 
     fn parse_sendtable_bytes(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
@@ -96,31 +88,25 @@ impl<'a> FirstPassParser<'a> {
         Ok(())
     }
 
-    fn create_first_pass_output(&mut self) -> Result<FirstPassOutput, DemoParserError> {
-        let cls_by_id = self.cls_by_id.as_ref().ok_or_else(|| DemoParserError::ClassMapperNotFoundFirstPass)?;
+    pub fn create_output(self) -> Result<FirstPassOutput, DemoParserError> {
+        let serializer_by_cls_id = self.serializer_by_cls_id.ok_or_else(|| DemoParserError::ClassMapperNotFoundFirstPass)?;
         Ok(FirstPassOutput {
-            order_by_steamid: self.order_by_steamid,
-            header: self.header.clone(),
-            fullpacket_offsets: self.fullpacket_offsets.clone(),
-            settings: self.settings,
-            baselines: self.baselines.clone(),
-            prop_controller: &self.prop_controller,
-            cls_by_id,
-            qfmap: &self.qf_mapper,
-            ge_list: &self.ge_list,
-            // arc?
-            wanted_players: self.wanted_players.clone(),
-            wanted_ticks: self.wanted_ticks.clone(),
-            string_tables: self.string_tables.clone(),
-            stringtable_players: self.stringtable_players.clone(),
-            added_temp_props: self.added_temp_props.clone(),
+            header: self.header,
+            fullpackets: self.fullpackets,
+            baselines: self.baselines,
+            prop_controller: self.prop_controller,
+            serializer_by_cls_id,
+            qfmap: self.qf_mapper,
+            ge_list: self.ge_list,
+            wanted_players: IntSet::from_iter(self.settings.wanted_players.iter().cloned()),
+            wanted_ticks: IntSet::from_iter(self.settings.wanted_ticks.iter().cloned()),
+            string_tables: self.string_tables,
+            stringtable_players: self.stringtable_players,
+            added_temp_props: self.added_temp_props,
         })
     }
 
     fn fallback_if_first_pass_missing_data(&mut self) -> Result<(), DemoParserError> {
-        if !self.fullpacket_offsets.contains(&HEADER_ENDS_AT_BYTE) {
-            self.fullpacket_offsets.push(HEADER_ENDS_AT_BYTE);
-        }
         if self.ge_list.is_empty() {
             self.parse_fallback_event_list()?;
         }
@@ -135,9 +121,9 @@ impl<'a> FirstPassParser<'a> {
     }
 
     fn parse_full_packet(&mut self, bytes: &[u8], frame: &Frame) -> Result<(), DemoParserError> {
-        self.fullpacket_offsets.push(frame.starts_at);
-
         let full_packet = CDemoFullPacket::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
+        self.fullpackets.insert(frame.starts_at, full_packet.packet);
+
         if let Some(string_table) = full_packet.string_table {
             for table in &string_table.tables {
                 match table.table_name() {
@@ -164,11 +150,11 @@ impl<'a> FirstPassParser<'a> {
         let mut bitreader = Bitreader::new(msg.data());
 
         while bitreader.bits_remaining().unwrap_or(0) > 8 {
-            let msg_type = bitreader.read_u_bit_var()?;
+            let msg_type = bitreader.read_u_bit_var()? as i32;
             let size = bitreader.read_varint()?;
             let msg_bytes = bitreader.read_n_bytes(size as usize)?;
 
-            match netmessage_type_from_int(msg_type as i32) {
+            match NetMessageType::from(msg_type) {
                 GE_Source1LegacyGameEventList => self.parse_game_event_list(&msg_bytes),
                 svc_CreateStringTable => self.parse_create_stringtable(&msg_bytes),
                 svc_UpdateStringTable => self.update_string_table(&msg_bytes),
@@ -180,7 +166,7 @@ impl<'a> FirstPassParser<'a> {
     }
 
     fn clear_stringtables(&mut self) -> Result<(), DemoParserError> {
-        self.string_tables = vec![];
+        self.string_tables.truncate(0);
         Ok(())
     }
 
@@ -238,39 +224,23 @@ impl<'a> FirstPassParser<'a> {
             Err(_) => return Err(DemoParserError::OutOfBytesError),
             Ok(arr) => i32::from_le_bytes(arr),
         };
-        self.ptr = HEADER_ENDS_AT_BYTE;
         Ok(())
     }
 
     fn parse_class_info(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
-        let (mut serializers, qf_mapper, p) = self.parse_sendtable()?;
         let msg = CDemoClassInfo::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
-        let mut cls_by_id = vec![
-            Class {
-                class_id: 0,
-                name: "None".to_string(),
-                serializer: Serializer {
-                    fields: vec![],
-                    name: "None".to_string(),
-                },
-            };
-            msg.classes.len() + 1
-        ];
+
+        let mut serializers = self.parse_sendtable()?;
+        let mut serializer_by_cls_id = vec![Serializer::default(); msg.classes.len()];
         for class_t in msg.classes {
-            let cls_id = class_t.class_id();
+            let cls_id = class_t.class_id() as usize;
             let network_name = class_t.network_name();
 
-            if let Some(ser) = serializers.remove(network_name) {
-                cls_by_id[cls_id as usize] = Class {
-                    class_id: cls_id,
-                    name: network_name.to_string(),
-                    serializer: ser,
-                }
+            if let Some(serializer) = serializers.remove(network_name) {
+                serializer_by_cls_id[cls_id] = serializer;
             }
         }
-        self.cls_by_id = Some(Arc::new(cls_by_id));
-        self.qf_mapper = qf_mapper;
-        self.prop_controller = p;
+        self.serializer_by_cls_id = Some(serializer_by_cls_id);
         Ok(())
     }
 }

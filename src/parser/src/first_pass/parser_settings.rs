@@ -1,129 +1,86 @@
-use crate::definitions::Class;
-use super::sendtables::Serializer;
-use super::stringtables::StringTable;
 use crate::first_pass::prop_controller::PropController;
-use crate::first_pass::prop_controller::PropInfo;
+use crate::first_pass::sendtables::Serializer;
+use crate::first_pass::stringtables::StringTable;
 use crate::first_pass::stringtables::UserInfo;
 use crate::second_pass::decoder::QfMapper;
-use crate::second_pass::parser_settings::PlayerEndMetaData;
-use crate::second_pass::parser_settings::SpecialIDs;
 use crate::second_pass::variants::Variant;
 use ahash::AHashMap;
-use ahash::AHashSet;
-use ahash::RandomState;
+use csgoproto::CDemoPacket;
 use csgoproto::CDemoSendTables;
 use csgoproto::csvc_msg_game_event_list::DescriptorT;
+use nohash::IntMap;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct ParserInputs<'a> {
-    pub real_name_to_og_name: AHashMap<String, String>,
-    pub wanted_players: Vec<u64>,
-    pub wanted_player_props: Vec<String>,
-    pub wanted_other_props: Vec<String>,
-    pub wanted_prop_states: AHashMap<String, Variant>,
-    pub wanted_ticks: Vec<i32>,
-    pub wanted_events: Vec<String>,
+pub struct ParserInputs {
+    pub only_convars: bool,
+    pub only_header: bool,
+    pub order_by_steamid: bool,
     pub parse_ents: bool,
     pub parse_projectiles: bool,
-    pub only_header: bool,
-    pub count_props: bool,
-    pub only_convars: bool,
-    pub huffman_lookup_table: &'a Vec<(u8, u8)>,
-    pub order_by_steamid: bool,
+    pub real_name_to_og_name: AHashMap<String, String>,
+    pub wanted_events: Vec<String>,
+    pub wanted_other_props: Vec<String>,
+    pub wanted_player_props: Vec<String>,
+    pub wanted_players: Vec<u64>,
+    pub wanted_prop_states: AHashMap<String, Variant>,
+    pub wanted_ticks: Vec<i32>,
 }
 
 pub struct FirstPassParser<'a> {
     pub added_temp_props: Vec<String>,
-    pub real_name_to_og_name: AHashMap<String, String>,
-    pub fullpacket_offsets: Vec<usize>,
-    pub ptr: usize,
-    pub tick: i32,
-    pub huf: &'a Vec<(u8, u8)>,
-    pub settings: &'a ParserInputs<'a>,
-    pub serializers: AHashMap<String, Serializer>,
-    pub cls_by_id: Option<Arc<Vec<Class>>>,
-    pub string_tables: Vec<StringTable>,
-    pub baselines: AHashMap<u32, Vec<u8>, RandomState>,
-    pub convars: AHashMap<String, String>,
-    pub player_md: Vec<PlayerEndMetaData>,
-    pub prop_controller: PropController,
+    pub baselines: AHashMap<u32, Vec<u8>>,
+    pub fullpackets: IntMap<usize, Option<CDemoPacket>>,
     pub ge_list: AHashMap<i32, DescriptorT>,
-    pub qf_mapper: QfMapper,
-    pub stringtable_players: BTreeMap<i32, UserInfo>,
-    pub qf_map_set: bool,
-    pub ge_list_set: bool,
-    pub cls_by_id_set: bool,
-    pub wanted_player_props: Vec<String>,
-    pub wanted_players: AHashSet<u64, RandomState>,
-    pub wanted_ticks: AHashSet<i32, RandomState>,
-    pub wanted_other_props: Vec<String>,
-    pub wanted_prop_states: AHashMap<String, Variant>,
-    pub wanted_events: Vec<String>,
-    pub parse_entities: bool,
-    pub parse_projectiles: bool,
-    pub name_to_id: AHashMap<String, u32>,
-    pub id: u32,
-    pub controller_ids: SpecialIDs,
-    pub only_header: bool,
-    pub prop_infos: Vec<PropInfo>,
     pub header: AHashMap<String, String>,
-    pub needs_velocity: bool,
+    pub prop_controller: PropController,
+    pub qf_mapper: QfMapper,
     pub sendtable_message: Option<CDemoSendTables>,
-    pub order_by_steamid: bool,
+    pub serializer_by_cls_id: Option<Vec<Serializer>>,
+    pub settings: &'a ParserInputs,
+    pub string_tables: Vec<StringTable>,
+    pub stringtable_players: BTreeMap<i32, UserInfo>,
+    pub wanted_player_props: Vec<String>,
 }
 
 impl<'a> FirstPassParser<'a> {
-    pub fn new(inputs: &'a ParserInputs<'a>) -> Self {
+    pub fn new(settings: &'a ParserInputs) -> Self {
+        let mut wanted_player_props = settings.wanted_player_props.clone();
+        let mut added_temp_props = Vec::new();
+
+        let needs_velocity = needs_velocity(&wanted_player_props);
+        if needs_velocity {
+            for prop in ["X", "Y", "Z"].map(String::from) {
+                if !wanted_player_props.contains(&prop) {
+                    added_temp_props.push(prop);
+                }
+            }
+            wanted_player_props.extend(added_temp_props.clone());
+        }
+
         FirstPassParser {
-            order_by_steamid: inputs.order_by_steamid,
-            sendtable_message: None,
-            needs_velocity: needs_velocity(&inputs.wanted_player_props),
-            added_temp_props: vec![],
-            stringtable_players: BTreeMap::default(),
-            only_header: inputs.only_header,
-            ge_list_set: false,
-            cls_by_id_set: false,
-            qf_map_set: false,
-            real_name_to_og_name: inputs.real_name_to_og_name.clone(),
-            prop_controller: PropController::new(
-                inputs.wanted_player_props.clone(),
-                inputs.wanted_other_props.clone(),
-                inputs.wanted_prop_states.clone(),
-                inputs.real_name_to_og_name.clone(),
-                false,
-                &["None".to_string()],
-            ),
-            cls_by_id: None,
-            player_md: vec![],
-            name_to_id: AHashMap::default(),
-            convars: AHashMap::default(),
-            string_tables: vec![],
-            fullpacket_offsets: vec![],
-            ptr: 0,
+            added_temp_props,
             baselines: AHashMap::default(),
-            tick: 0,
-            huf: inputs.huffman_lookup_table,
+            fullpackets: IntMap::default(),
+            ge_list: AHashMap::default(),
+            header: AHashMap::default(),
+            prop_controller: PropController::new(
+                wanted_player_props.clone(),
+                settings.wanted_other_props.clone(),
+                settings.wanted_prop_states.clone(),
+                settings.real_name_to_og_name.clone(),
+                needs_velocity,
+            ),
             qf_mapper: QfMapper {
                 idx: 0,
                 map: AHashMap::default(),
             },
-            ge_list: AHashMap::default(),
-            parse_entities: true,
-            serializers: AHashMap::default(),
-            parse_projectiles: false,
-            wanted_player_props: inputs.wanted_player_props.clone(),
-            wanted_events: inputs.wanted_events.clone(),
-            wanted_players: AHashSet::from_iter(inputs.wanted_players.iter().cloned()),
-            wanted_ticks: AHashSet::from_iter(inputs.wanted_ticks.iter().cloned()),
-            wanted_other_props: inputs.wanted_other_props.clone(),
-            wanted_prop_states: inputs.wanted_prop_states.clone(),
-            settings: inputs,
-            controller_ids: SpecialIDs::default(),
-            id: 0,
-            prop_infos: vec![],
-            header: AHashMap::default(),
+            sendtable_message: None,
+            serializer_by_cls_id: None,
+            settings,
+            string_tables: vec![],
+            stringtable_players: BTreeMap::default(),
+            wanted_player_props,
         }
     }
 }

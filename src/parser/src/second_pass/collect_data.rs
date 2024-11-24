@@ -1,5 +1,3 @@
-#![allow(clippy::unnecessary_lazy_evaluations)]
-
 use crate::definitions::DemoParserError;
 use super::entities::PlayerMetaData;
 use super::variants::Sticker;
@@ -62,47 +60,44 @@ pub enum CoordinateAxis {
 }
 
 // This file collects the data that is converted into a dataframe in the end in parser.parse_ticks()
-
 impl<'a> SecondPassParser<'a> {
     pub fn collect_entities(&mut self) {
-        if !self.prop_controller.needs_velocity
-            && (!self.wanted_ticks.contains(&self.tick) && !self.wanted_ticks.is_empty() || !self.wanted_events.is_empty())
-        {
+        if !self.should_collect() {
             return;
         }
-        if self.parse_projectiles {
+        if self.settings.parse_projectiles {
             self.collect_projectiles();
         }
+
         // iterate every player and every wanted prop name
         // if either one is missing then push None to output
         for (entity_id, player) in &self.players {
+            let Some(player_steamid) = player.steamid else { continue };
+            if !self.wanted_players.is_empty() && !self.wanted_players.contains(&player_steamid) {
+                continue;
+            }
+
             // iterate every wanted prop state
             // if any prop's state for this tick is not the wanted state, dont extract info from tick
-            for wanted_prop_state_info in &self.prop_controller.wanted_prop_state_infos {
-                match self.find_prop(&wanted_prop_state_info.base, entity_id, player) {
-                    Ok(prop) => {
-                        if prop != wanted_prop_state_info.wanted_prop_state {
-                            return;
-                        }
-                    }
-                    Err(_e) => return,
+            for info in &self.prop_controller.wanted_prop_state_infos {
+                if !self.find_prop(&info.base, entity_id, player).is_ok_and(|state| state == info.wanted_prop_state) {
+                    return;
                 }
             }
 
             for prop_info in &self.prop_controller.prop_infos {
-                let player_steamid = player.steamid.unwrap_or(0);
-                if !self.wanted_players.is_empty() && !self.wanted_players.contains(&player_steamid) {
-                    continue;
-                }
-
                 let item = self.find_prop(prop_info, entity_id, player).ok();
-                if self.order_by_steamid {
-                    self.df_per_player.entry(player_steamid).or_default().entry(prop_info.id).or_default().push(item)
+                if self.settings.order_by_steamid {
+                    self.prop_data_per_player.entry(player_steamid).or_default().entry(prop_info.id).or_default().push(item)
                 } else {
-                    self.output.entry(prop_info.id).or_default().push(item)
+                    self.prop_data.entry(prop_info.id).or_default().push(item)
                 }
             }
         }
+    }
+
+    fn should_collect(&self) -> bool {
+        self.prop_controller.needs_velocity || !self.has_wanted_events && (self.wanted_ticks.contains(&self.tick) || self.wanted_ticks.is_empty())
     }
 
     pub fn find_prop(&self, prop_info: &PropInfo, entity_id: &i32, player: &PlayerMetaData) -> Result<Variant, PropCollectionError> {
@@ -214,14 +209,14 @@ impl<'a> SecondPassParser<'a> {
 
     fn find_grenade_type(&self, entity_id: &i32) -> Option<String> {
         if let Some(Some(ent)) = self.entities.get(*entity_id as usize) {
-            let cls = self.cls_by_id.get(ent.cls_id as usize)?;
+            let serializer = self.serializer_by_cls_id.get(ent.cls_id as usize)?;
             // Seperate between ct and t molotovs
-            if cls.name == "CMolotovProjectile" {
+            if serializer.name == "CMolotovProjectile" {
                 if let Some(Variant::Bool(true)) = self.get_prop_variant(self.prop_controller.special_ids.is_incendiary_grenade, entity_id) {
                     return Some("incendiary_grenade".to_string());
                 }
             }
-            let name = GRENADE_FRIENDLY_NAMES.get(&cls.name)?;
+            let name = GRENADE_FRIENDLY_NAMES.get(&serializer.name)?;
             Some(name.to_string())
         } else {
             None
@@ -370,8 +365,8 @@ impl<'a> SecondPassParser<'a> {
 
     fn find_is_airborne(&self, player: &PlayerMetaData) -> Result<Variant, PropCollectionError> {
         if let Some(entity_id) = &player.player_entity_id {
-            if let Some(Variant::U32(airborn_h)) = self.get_prop_variant(self.prop_controller.special_ids.is_airborn, entity_id) {
-                return Ok(Variant::Bool(airborn_h == IS_AIRBORNE_CONST));
+            if let Some(Variant::U32(value)) = self.get_prop_variant(self.prop_controller.special_ids.is_airborne, entity_id) {
+                return Ok(Variant::Bool(value == IS_AIRBORNE_CONST));
             }
         }
         Ok(Variant::Bool(false))
@@ -453,7 +448,7 @@ impl<'a> SecondPassParser<'a> {
 
     fn collect_velocity(&self, player: &PlayerMetaData) -> Result<Variant, PropCollectionError> {
         if let Some(s) = player.steamid {
-            let steamids = self.output.get(&STEAMID_ID);
+            let steamids = self.prop_data.get(&STEAMID_ID);
             let indicies = self.find_wanted_indicies(steamids, s);
 
             let x = self.velocity_from_indicies(&indicies, CoordinateAxis::X)?;
@@ -468,7 +463,7 @@ impl<'a> SecondPassParser<'a> {
 
     fn collect_velocity_axis(&self, axis: CoordinateAxis, player: &PlayerMetaData) -> Result<Variant, PropCollectionError> {
         let player_steamid = player.steamid.ok_or_else(|| PropCollectionError::PlayerNotFound)?;
-        let steamids = self.output.get(&STEAMID_ID);
+        let steamids = self.prop_data.get(&STEAMID_ID);
         let indicies = self.find_wanted_indicies(steamids, player_steamid);
         self.velocity_from_indicies(&indicies, axis)
     }
@@ -508,9 +503,9 @@ impl<'a> SecondPassParser<'a> {
 
     fn velocity_from_indicies(&self, indicies: &[usize], axis: CoordinateAxis) -> Result<Variant, PropCollectionError> {
         let column = match axis {
-            CoordinateAxis::X => self.output.get(&PLAYER_X_ID),
-            CoordinateAxis::Y => self.output.get(&PLAYER_Y_ID),
-            CoordinateAxis::Z => self.output.get(&PLAYER_Z_ID),
+            CoordinateAxis::X => self.prop_data.get(&PLAYER_X_ID),
+            CoordinateAxis::Y => self.prop_data.get(&PLAYER_Y_ID),
+            CoordinateAxis::Z => self.prop_data.get(&PLAYER_Z_ID),
         };
         if let Some(propcol) = column {
             if let Some((Some(v1), Some(v2))) = self.index_coordinates_from_propcol(propcol, indicies) {

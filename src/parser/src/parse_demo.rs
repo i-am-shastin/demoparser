@@ -1,4 +1,4 @@
-use crate::definitions::{DemoParserError, HEADER_ENDS_AT_BYTE};
+use crate::definitions::DemoParserError;
 use crate::first_pass::frameparser::{FrameParser, DemoChunk};
 use crate::first_pass::parser::FirstPassOutput;
 use crate::first_pass::parser_settings::{FirstPassParser, ParserInputs};
@@ -14,8 +14,10 @@ use ahash::AHashMap;
 use ahash::AHashSet;
 use csgoproto::CsvcMsgVoiceData;
 use itertools::Itertools;
+use nohash::IntSet;
 use rayon::iter::IntoParallelIterator;
 use rayon::prelude::ParallelIterator;
+use std::mem;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use std::time::Duration;
@@ -26,8 +28,6 @@ pub struct DemoOutput {
     pub game_events: Vec<GameEvent>,
     pub skins: Vec<EconItem>,
     pub item_drops: Vec<EconItem>,
-    pub chat_messages: Vec<ChatMessageRecord>,
-    pub convars: AHashMap<String, String>,
     pub header: Option<AHashMap<String, String>>,
     pub player_md: Vec<PlayerEndMetaData>,
     pub game_events_counter: AHashSet<String>,
@@ -37,8 +37,8 @@ pub struct DemoOutput {
     pub df_per_player: AHashMap<u64, AHashMap<u32, PropColumn>>,
 }
 
-pub struct Parser<'a> {
-    input: ParserInputs<'a>,
+pub struct Parser {
+    input: ParserInputs,
     parsing_mode: ParsingMode,
 }
 
@@ -50,8 +50,8 @@ pub enum ParsingMode {
     Normal,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(input: ParserInputs<'a>, parsing_mode: ParsingMode) -> Self {
+impl Parser {
+    pub fn new(input: ParserInputs, parsing_mode: ParsingMode) -> Self {
         Parser {
             input,
             parsing_mode,
@@ -59,69 +59,67 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_demo(&mut self, demo_bytes: &[u8]) -> Result<DemoOutput, DemoParserError> {
-        let multithreadable = !self.input.wanted_player_props.iter().any(|p| NON_MULTITHREADABLE_PROPS.contains(p));
+        use std::time::Instant;
+        let now = Instant::now();
+    
+        {
+            let mut first_pass_parser = FirstPassParser::new(&self.input);
+            first_pass_parser.parse_demo(demo_bytes)?;
+            let _first_pass_output = first_pass_parser.create_output()?;
+        }
+    
+        let elapsed = now.elapsed();
+        println!("Elapsed: {:.2?}", elapsed);
+
         let mut first_pass_parser = FirstPassParser::new(&self.input);
+        first_pass_parser.parse_demo(demo_bytes)?;
+        let first_pass_output = first_pass_parser.create_output()?;
 
         // Multi threaded second pass
-        if self.parsing_mode == ParsingMode::ForceMultiThreaded || (multithreadable && self.parsing_mode == ParsingMode::Normal) {
+        if self.parsing_mode == ParsingMode::ForceMultiThreaded || self.is_multithreadable() {
             let (sender, receiver) = channel();
             let _ = FrameParser::default().start(demo_bytes, Some(&sender));
-            return first_pass_parser
-                .parse_demo(demo_bytes, true)
-                .and_then(|first_pass_output| {
-                    self.second_pass_threaded_with_channels(demo_bytes, first_pass_output, receiver)
-                });
+            return self.second_pass_threaded_with_channels(demo_bytes, first_pass_output, receiver);
         }
 
-        if multithreadable && self.parsing_mode != ParsingMode::ForceSingleThreaded {
-            // Rayon-based multi threaded second pass
+        // Rayon-based multi threaded second pass
+        if self.parsing_mode == ParsingMode::ForceRayonThreaded {
             return FrameParser::default()
                 .start(demo_bytes, None)
-                .and_then(|offsets| {
-                    first_pass_parser
-                        .parse_demo(demo_bytes, true)
-                        .and_then(|first_pass_output| {
-                            self.second_pass_multi_threaded_no_channels(offsets, demo_bytes, first_pass_output)
-                        })
-                })
-           
+                .and_then(|chunks| self.second_pass_multi_threaded_no_channels(chunks, demo_bytes, first_pass_output));
         }
 
         // Single threaded second pass
-        first_pass_parser
-            .parse_demo(demo_bytes, false)
-            .and_then(|first_pass_output| {
-                self.second_pass_single_threaded(demo_bytes, first_pass_output)
-            })
+        self.second_pass_single_threaded(demo_bytes, first_pass_output)
     }
 
-    fn second_pass_single_threaded(&self, outer_bytes: &[u8], first_pass_output: FirstPassOutput) -> Result<DemoOutput, DemoParserError> {
-        let mut parser = SecondPassParser::new(first_pass_output.clone(), HEADER_ENDS_AT_BYTE, true, None)?;
-        parser.start(outer_bytes)?;
+    fn second_pass_single_threaded(&self, demo_bytes: &[u8], first_pass_output: FirstPassOutput) -> Result<DemoOutput, DemoParserError> {
+        let mut parser = SecondPassParser::new(&self.input, &first_pass_output, None)?;
+        parser.start(demo_bytes)?;
         let second_pass_output = parser.create_output();
 
-        let output = self.combine_outputs(&mut vec![second_pass_output], first_pass_output);
+        let output = self.combine_outputs(vec![second_pass_output], first_pass_output);
         Ok(output)
     }
 
     fn second_pass_threaded_with_channels(
         &self,
-        outer_bytes: &[u8],
+        demo_bytes: &[u8],
         first_pass_output: FirstPassOutput,
         reciever: Receiver<DemoChunk>,
     ) -> Result<DemoOutput, DemoParserError> {
+        let output_for_thread = &first_pass_output.clone();
         thread::scope(|s| {
             let mut handles = vec![];
             loop {
-                let offset = reciever.recv_timeout(Duration::from_secs(3)).map_err(|_| DemoParserError::MultithreadingWasNotOk)?;
-                if offset.end_of_demo {
+                let chunk = reciever.recv_timeout(Duration::from_secs(3)).map_err(|_| DemoParserError::MultithreadingWasNotOk)?;
+                if chunk.end_of_demo {
                     break;
                 }
 
-                let my_first_out = first_pass_output.clone();
                 handles.push(s.spawn(move || {
-                    let mut parser = SecondPassParser::new(my_first_out, offset.start, false, Some(offset))?;
-                    parser.start(outer_bytes)?;
+                    let mut parser = SecondPassParser::new(&self.input, output_for_thread, Some(chunk))?;
+                    parser.start(demo_bytes)?;
                     Ok(parser.create_output())
                 }));
             }
@@ -132,7 +130,7 @@ impl<'a> Parser<'a> {
                 .map(|result| result.join().map_err(|_| DemoParserError::MalformedMessage)?)
                 .collect();
 
-            let output = self.combine_outputs(&mut second_pass_outputs?, first_pass_output);
+            let output = self.combine_outputs(second_pass_outputs?, first_pass_output);
             Ok(output)
         })
     }
@@ -140,20 +138,24 @@ impl<'a> Parser<'a> {
     fn second_pass_multi_threaded_no_channels(
         &self,
         chunks: Vec<DemoChunk>,
-        outer_bytes: &[u8],
+        demo_bytes: &[u8],
         first_pass_output: FirstPassOutput,
     ) -> Result<DemoOutput, DemoParserError> {
         let second_pass_outputs: Result<Vec<SecondPassOutput>, DemoParserError> = chunks
             .into_par_iter()
             .map(|chunk| {
-                let mut parser = SecondPassParser::new(first_pass_output.clone(), chunk.start, false, Some(chunk))?;
-                parser.start(outer_bytes)?;
+                let mut parser = SecondPassParser::new(&self.input, &first_pass_output, Some(chunk))?;
+                parser.start(demo_bytes)?;
                 Ok(parser.create_output())
             })
             .collect();
 
-        let output = self.combine_outputs(&mut second_pass_outputs?, first_pass_output);
+        let output = self.combine_outputs(second_pass_outputs?, first_pass_output);
         Ok(output)
+    }
+
+    fn is_multithreadable(&self) -> bool {
+        self.parsing_mode == ParsingMode::Normal && !self.input.wanted_player_props.iter().any(|p| NON_MULTITHREADABLE_PROPS.contains(p))
     }
 
     fn remove_item_sold_events(events: &mut Vec<GameEvent>) {
@@ -207,45 +209,44 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn rm_unwanted_ticks(&self, hm: &mut AHashMap<u32, PropColumn>) -> Option<AHashMap<u32, PropColumn>> {
+    fn remove_unwanted_ticks(hm: &mut AHashMap<u32, PropColumn>, wanted_ticks: IntSet<i32>) {
         // Used for removing ticks when velocity is needed
-        if self.input.wanted_ticks.is_empty() {
-            return None;
-        }
-        let mut wanted_indicies = vec![];
-        if let Some(ticks) = hm.get(&TICK_ID) {
-            if let Some(VarVec::I32(t)) = &ticks.data {
-                for (idx, val) in t.iter().enumerate() {
-                    if let Some(tick) = val {
-                        if self.input.wanted_ticks.contains(tick) {
-                            wanted_indicies.push(idx);
-                        }
-                    }
+        let Some(ticks) = hm.get(&TICK_ID) else { return };
+        let Some(VarVec::I32(ticks)) = &ticks.data else { return };
+
+        let wanted_indicies = ticks.iter()
+            .enumerate()
+            .filter_map(|(idx, tick)| {
+                if tick.is_some_and(|t| wanted_ticks.contains(&t)) {
+                    Some(idx)
+                } else {
+                    None
                 }
-            }
+            })
+            .collect_vec();
+
+        for prop_column in hm.values_mut() {
+            prop_column.retain(&wanted_indicies);
         }
-        let mut new_df = AHashMap::default();
-        for (k, v) in hm {
-            if let Some(new) = v.slice_to_new(&wanted_indicies) {
-                new_df.insert(*k, new);
-            }
-        }
-        Some(new_df)
     }
 
-    fn combine_outputs(&self, second_pass_outputs: &mut [SecondPassOutput], first_pass_output: FirstPassOutput) -> DemoOutput {
+    fn combine_outputs(&self, mut second_pass_outputs: Vec<SecondPassOutput>, mut first_pass_output: FirstPassOutput) -> DemoOutput {
         // Combines all inner DemoOutputs into one big output
         second_pass_outputs.sort_by_key(|x| x.ptr);
 
-        let mut dfs = second_pass_outputs.iter().map(|x| x.df.clone()).collect();
-        let all_dfs_combined = self.combine_dfs(&mut dfs, false);
         // Remove temp props
-        let mut prop_controller = first_pass_output.prop_controller.clone();
         for prop in first_pass_output.added_temp_props {
-            prop_controller.wanted_player_props.retain(|x| x != &prop);
-            prop_controller.prop_infos.retain(|x| x.prop_name != prop);
+            first_pass_output.prop_controller.wanted_player_props.retain(|x| *x != prop);
+            first_pass_output.prop_controller.prop_infos.retain(|x| x.prop_name != prop);
         }
-        let per_players = second_pass_outputs.iter().map(|x| x.df_per_player.clone()).collect_vec();
+
+        let dfs = second_pass_outputs.iter_mut().map(|x| mem::take(&mut x.prop_data)).collect_vec();
+        let mut all_dfs_combined = self.combine_dfs(dfs, false);
+        if !first_pass_output.wanted_ticks.is_empty() {
+            Parser::remove_unwanted_ticks(&mut all_dfs_combined, first_pass_output.wanted_ticks);
+        }
+
+        let per_players = second_pass_outputs.iter_mut().map(|x| mem::take(&mut x.prop_data_per_player)).collect_vec();
         let mut all_steamids = AHashSet::default();
         for entry in &per_players {
             for k in entry.keys() {
@@ -260,56 +261,45 @@ impl<'a> Parser<'a> {
                     v.push(df.clone());
                 }
             }
-            let combined = self.combine_dfs(&mut v, true);
+            let combined = self.combine_dfs(v, true);
             pp.insert(*steamid, combined);
         }
 
         let mut output = DemoOutput {
-            prop_controller,
-            chat_messages: second_pass_outputs.iter().flat_map(|x| x.chat_messages.clone()).collect(),
-            item_drops: second_pass_outputs.iter().flat_map(|x| x.item_drops.clone()).collect(),
-            player_md: second_pass_outputs.iter().flat_map(|x| x.player_md.clone()).collect(),
-            game_events: second_pass_outputs.iter().flat_map(|x| x.game_events.clone()).collect(),
-            skins: second_pass_outputs.iter().flat_map(|x| x.skins.clone()).collect(),
-            convars: second_pass_outputs.iter().flat_map(|x| x.convars.clone()).collect(),
+            prop_controller: first_pass_output.prop_controller,
+            item_drops: second_pass_outputs.iter_mut().flat_map(|x| mem::take(&mut x.item_drops)).collect(),
+            player_md: second_pass_outputs.iter_mut().flat_map(|x| mem::take(&mut x.player_md)).collect(),
+            game_events: second_pass_outputs.iter_mut().flat_map(|x| mem::take(&mut x.game_events)).collect(),
+            skins: second_pass_outputs.iter_mut().flat_map(|x| mem::take(&mut x.skins)).collect(),
             df: all_dfs_combined,
             header: Some(first_pass_output.header),
-            game_events_counter: second_pass_outputs.iter().flat_map(|x| x.game_events_counter.clone()).collect(),
-            projectiles: second_pass_outputs.iter().flat_map(|x| x.projectiles.clone()).collect(),
-            voice_data: second_pass_outputs.iter().flat_map(|x| x.voice_data.clone()).collect_vec(),
+            game_events_counter: second_pass_outputs.iter_mut().flat_map(|x| mem::take(&mut x.game_events_counter)).collect(),
+            projectiles: second_pass_outputs.iter_mut().flat_map(|x| mem::take(&mut x.projectiles)).collect(),
+            voice_data: second_pass_outputs.iter_mut().flat_map(|x| mem::take(&mut x.voice_data)).collect_vec(),
             df_per_player: pp,
         };
         
-        if let Some(new_df) = self.rm_unwanted_ticks(&mut output.df) {
-            output.df = new_df;
-        }
         Parser::add_item_purchase_sell_column(&mut output.game_events);
         Parser::remove_item_sold_events(&mut output.game_events);
 
         output
     }
 
-    fn combine_dfs(&self, hashmaps: &mut Vec<AHashMap<u32, PropColumn>>, remove_name_and_steamid: bool) -> AHashMap<u32, PropColumn> {
-        if hashmaps.len() == 1 {
-            let mut result = hashmaps.remove(0);
-            if remove_name_and_steamid {
-                result.remove(&STEAMID_ID);
-                result.remove(&NAME_ID);
-            }
-            return result;
-        }
-
-        let mut result: AHashMap<u32, PropColumn> = AHashMap::default();
-        for part_df in hashmaps {
-            for (key, value) in part_df {
-                if remove_name_and_steamid && (key == &STEAMID_ID || key == &NAME_ID) {
-                    continue;
+    fn combine_dfs(&self, hashmaps: Vec<AHashMap<u32, PropColumn>>, remove_name_and_steamid: bool) -> AHashMap<u32, PropColumn> {
+        let mut result = hashmaps.into_iter()
+            .reduce(|mut acc, part| {
+                for (key, mut value) in part {
+                    acc.entry(key)
+                        .and_modify(|inner| inner.extend_from(&mut value))
+                        .or_insert_with(|| value);
                 }
+                acc
+            })
+            .unwrap_or_default();
 
-                result.entry(*key)
-                    .and_modify(|inner| inner.extend_from(value))
-                    .or_insert_with(|| value.clone());
-            }
+        if remove_name_and_steamid {
+            result.remove(&STEAMID_ID);
+            result.remove(&NAME_ID);
         }
         result
     }

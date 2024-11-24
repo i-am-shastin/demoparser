@@ -1,16 +1,8 @@
-use crate::first_pass::sendtables::Serializer;
 use std::fmt;
 
 pub const HEADER_ENDS_AT_BYTE: usize = 16;
 pub const OUTER_BUF_DEFAULT_LEN: usize = 400_000;
 pub const INNER_BUF_DEFAULT_LEN: usize = 8192 * 15;
-
-#[derive(Debug, Clone)]
-pub struct Class {
-    pub class_id: i32,
-    pub name: String,
-    pub serializer: Serializer,
-}
 
 #[derive(Debug, PartialEq)]
 pub enum DemoParserError {

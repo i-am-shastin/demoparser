@@ -5,7 +5,6 @@ use parser::definitions::DemoParserError;
 use parser::parse_demo::ParsingMode;
 use parser::second_pass::game_events::EventField;
 use parser::second_pass::game_events::GameEvent;
-use parser::second_pass::parser_settings::create_huffman_lookup_table;
 use parser::second_pass::variants::BytesVariant;
 use parser::second_pass::variants::VarVec;
 use parser::second_pass::variants::Variant;
@@ -69,13 +68,17 @@ where
     Exception::new_err(format!("{e}"))
 }
 
+#[pyclass]
+struct DemoParser {
+    bytes: BytesVariant,
+}
+
 #[pymethods]
 impl DemoParser {
     #[new]
     pub fn py_new(demo_path: String) -> PyResult<Self> {
         let bytes = exports::create_mmap(&demo_path).map_err(|e| Exception::new_err(format!("{e}. File name: {demo_path}")))?;
-        let huf = create_huffman_lookup_table();
-        Ok(Self { bytes, huf })
+        Ok(Self { bytes })
     }
 
     /// Parses header message (different from the first 16 bytes of the file)
@@ -86,13 +89,13 @@ impl DemoParser {
     /// "allow_clientside_particles", "demo_version_name", "demo_version_guid",
     /// "client_name", "game_directory"
     pub fn parse_header(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let header = exports::parse_header(&self.bytes, &self.huf, ParsingMode::Normal).map_err(to_py_err)?;
+        let header = exports::parse_header(&self.bytes, ParsingMode::Normal).map_err(to_py_err)?;
         Ok(header.to_object(py))
     }
 
     /// Returns the names of game events present in the demo
     pub fn list_game_events(&self, _py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let game_events = exports::list_game_events(&self.bytes, &self.huf, ParsingMode::Normal).map_err(to_py_err)?;
+        let game_events = exports::list_game_events(&self.bytes, ParsingMode::Normal).map_err(to_py_err)?;
         Ok(Python::with_gil(|py| game_events.to_object(py)))
     }
 
@@ -104,7 +107,7 @@ impl DemoParser {
     /// 1 -388.875  1295.46875 -5120.0   983              NaN    HeGrenade
     /// 2 -388.875  1295.46875 -5120.0   983              NaN    HeGrenade
     pub fn parse_grenades(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let projectiles = exports::parse_grenades(&self.bytes, &self.huf, ParsingMode::Normal).map_err(to_py_err)?;
+        let projectiles = exports::parse_grenades(&self.bytes, ParsingMode::Normal).map_err(to_py_err)?;
 
         let entity_id: Vec<Option<i32>> = projectiles.iter().map(|s| s.entity_id).collect();
         let xs: Vec<Option<f32>> = projectiles.iter().map(|s| s.x).collect();
@@ -151,7 +154,7 @@ impl DemoParser {
     }
 
     pub fn parse_player_info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let player_md = exports::parse_player_info(&self.bytes, &self.huf, ParsingMode::Normal).map_err(to_py_err)?;
+        let player_md = exports::parse_player_info(&self.bytes, ParsingMode::Normal).map_err(to_py_err)?;
 
         let steamids: Vec<Option<u64>> = player_md.iter().map(|p| p.steamid).collect();
         let team_numbers: Vec<Option<i32>> = player_md.iter().map(|p| p.team_number).collect();
@@ -177,7 +180,7 @@ impl DemoParser {
     }
 
     pub fn parse_item_drops(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let item_drops = exports::parse_item_drops(&self.bytes, &self.huf, ParsingMode::Normal).map_err(to_py_err)?;
+        let item_drops = exports::parse_item_drops(&self.bytes, ParsingMode::Normal).map_err(to_py_err)?;
 
         let def_index: Vec<Option<u32>> = item_drops.iter().map(|x| x.def_index).collect();
         let account_id: Vec<Option<u32>> = item_drops.iter().map(|x| x.account_id).collect();
@@ -236,7 +239,7 @@ impl DemoParser {
     }
 
     pub fn parse_skins(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let skins = exports::parse_player_skins(&self.bytes, &self.huf, ParsingMode::Normal).map_err(to_py_err)?;
+        let skins = exports::parse_player_skins(&self.bytes, ParsingMode::Normal).map_err(to_py_err)?;
 
         let def_idx_vec: Vec<Option<u32>> = skins.iter().map(|s| s.def_index).collect();
         let item_id: Vec<Option<u64>> = skins.iter().map(|s| s.item_id).collect();
@@ -295,7 +298,6 @@ impl DemoParser {
     ) -> PyResult<Py<PyAny>> {
         let game_events = exports::parse_event(
             &self.bytes,
-            &self.huf,
             ParsingMode::Normal,
             event_name,
             player,
@@ -314,7 +316,6 @@ impl DemoParser {
     ) -> PyResult<Py<PyAny>> {
         let game_events = exports::parse_events(
             &self.bytes,
-            &self.huf,
             ParsingMode::Normal,
             event_name,
             player,
@@ -348,7 +349,6 @@ impl DemoParser {
 
         let output = exports::parse_ticks(
             &self.bytes,
-            &self.huf,
             ParsingMode::Normal,
             wanted_props,
             ticks,
@@ -527,12 +527,6 @@ pub fn arr_to_py(array: Box<dyn Array>) -> PyResult<PyObject> {
         let out = polars.call_method1("from_arrow", (pyarrow_array,))?;
         Ok(out.to_object(py))
     })
-}
-
-#[pyclass]
-struct DemoParser {
-    bytes: BytesVariant,
-    huf: Vec<(u8, u8)>,
 }
 
 pub fn series_from_multiple_events(

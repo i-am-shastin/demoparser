@@ -1,3 +1,5 @@
+#![allow(clippy::unnecessary_lazy_evaluations)]
+
 #[cfg(test)]
 pub mod e2e_test;
 pub mod first_pass;

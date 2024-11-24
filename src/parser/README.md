@@ -16,27 +16,23 @@ use ahash::AHashMap;
 use memmap2::MmapOptions;
 use parser::first_pass::parser_settings::ParserInputs;
 use parser::parse_demo::Parser;
-use parser::second_pass::parser_settings::create_huffman_lookup_table;
 use std::fs::File;
 
 fn main() {
     let path_to_demo = "test_demo.dem";
-    let huf = create_huffman_lookup_table();
 
     let settings = ParserInputs {
-        wanted_players: vec![],
+        only_convars: false,
+        only_header: false,
+        order_by_player: false,
+        parse_ents: true,
+        parse_projectiles: false,
         real_name_to_og_name: AHashMap::default(),
-        wanted_player_props: vec!["X".to_string()],
         wanted_events: vec!["player_death".to_string()],
         wanted_other_props: vec![],
-        parse_ents: true,
+        wanted_player_props: vec!["X".to_string()],
+        wanted_players: vec![],
         wanted_ticks: vec![],
-        parse_projectiles: false,
-        only_header: false,
-        count_props: false,
-        only_convars: false,
-        huffman_lookup_table: &huf,
-        order_by_player: false,
     };
     let mut ds = Parser::new(settings, false);
     let file = File::open(path_to_demo).unwrap();

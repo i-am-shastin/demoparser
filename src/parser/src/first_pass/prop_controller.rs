@@ -8,6 +8,9 @@ use crate::second_pass::collect_data::PropType;
 use crate::second_pass::parser_settings::SpecialIDs;
 use crate::second_pass::variants::Variant;
 use ahash::AHashMap;
+use aho_corasick::AhoCorasick;
+use aho_corasick::AhoCorasickBuilder;
+use lazy_static::lazy_static;
 
 pub const ENTITY_HANDLE_MISSING: i32 = 2047;
 pub const SPECTATOR_TEAM_NUM: u32 = 1;
@@ -82,29 +85,36 @@ pub const INPUT_HISTORY_RENDER_TICK_FRACTION_OFFSET: u32 = 4;
 pub const INPUT_HISTORY_PLAYER_TICK_COUNT_OFFSET: u32 = 5;
 pub const INPUT_HISTORY_PLAYER_TICK_FRACTION_OFFSET: u32 = 6;
 
-#[derive(Clone, Debug)]
+lazy_static! {
+    static ref BUILDER: AhoCorasickBuilder = AhoCorasick::builder().kind(Some(aho_corasick::AhoCorasickKind::ContiguousNFA)).match_kind(aho_corasick::MatchKind::LeftmostFirst).to_owned();
+    static ref PLAYER_AC: AhoCorasick = BUILDER.build(["Player"]).unwrap();
+    static ref GRENADE_AC: AhoCorasick = BUILDER.build(["Flash", "Grenade", "Projectile"]).unwrap();
+    static ref WEAPON_AC: AhoCorasick = BUILDER.build(["AK", "Weapon"]).unwrap();
+    static ref WEAPON_TYPE_AC: AhoCorasick = BUILDER.build(["C4", "Inc", "Molo", "Knife", "Infer", "CDEagle"]).unwrap();
+    static ref WEAPON_SKIN_AC: AhoCorasick = BUILDER.build(["CEconItemAttribute.m_iRawValue32"]).unwrap();
+}
+
+#[derive(Clone, Default, Debug)]
 pub struct PropController {
-    pub id: u32,
-    pub wanted_player_props: Vec<String>,
-    pub prop_infos: Vec<PropInfo>,
-    pub name_to_id: AHashMap<String, u32>,
     pub id_to_name: AHashMap<u32, String>,
-    pub special_ids: SpecialIDs,
-    pub real_name_to_og_name: AHashMap<String, String>,
-    pub name_to_special_id: AHashMap<String, u32>,
-    pub wanted_other_props: Vec<String>,
+    pub id: u32,
+    pub name_to_id: AHashMap<String, u32>,
     pub needs_velocity: bool,
-    pub path_to_name: AHashMap<[i32; 7], String>,
-    pub wanted_prop_states: AHashMap<String, Variant>,
+    pub prop_infos: Vec<PropInfo>,
+    pub real_name_to_og_name: AHashMap<String, String>,
+    pub special_ids: SpecialIDs,
+    pub wanted_other_props: Vec<String>,
+    pub wanted_player_props: Vec<String>,
     pub wanted_prop_state_infos: Vec<WantedPropStateInfo>,
+    pub wanted_prop_states: AHashMap<String, Variant>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropInfo {
     pub id: u32,
     pub prop_type: PropType,
-    pub prop_name: String,
     pub prop_friendly_name: String,
+    pub prop_name: String,
     pub is_player_prop: bool,
 }
 
@@ -114,12 +124,6 @@ pub struct WantedPropStateInfo {
     pub wanted_prop_state: Variant,
 }
 
-pub enum PropCollectionType {
-    Player,
-    Rules,
-    Team,
-}
-
 impl PropController {
     pub fn new(
         wanted_player_props: Vec<String>,
@@ -127,22 +131,19 @@ impl PropController {
         wanted_prop_states: AHashMap<String, Variant>,
         real_name_to_og_name: AHashMap<String, String>,
         needs_velocity: bool,
-        wanted_events: &[String],
     ) -> Self {
         PropController {
-            id: NORMAL_PROP_BASEID,
-            wanted_player_props,
-            prop_infos: vec![],
-            name_to_id: AHashMap::default(),
-            special_ids: SpecialIDs::default(),
             id_to_name: AHashMap::default(),
-            name_to_special_id: AHashMap::default(),
-            wanted_other_props,
+            id: NORMAL_PROP_BASEID,
+            name_to_id: AHashMap::default(),
+            needs_velocity,
+            prop_infos: vec![],
             real_name_to_og_name,
-            needs_velocity: !wanted_events.is_empty() && needs_velocity,
-            path_to_name: AHashMap::default(),
-            wanted_prop_states,
+            special_ids: SpecialIDs::default(),
+            wanted_other_props,
+            wanted_player_props,
             wanted_prop_state_infos: vec![],
+            wanted_prop_states,
         }
     }
 
@@ -150,23 +151,24 @@ impl PropController {
         let mut someid = BUTTONS_BASEID;
         let mut someid2 = BUTTONS_BASEID;
         for button_name in BUTTONMAP.keys() {
-            if self.wanted_player_props.contains(&button_name.to_string()) {
+            let button_name = button_name.to_string();
+            if self.wanted_player_props.contains(&button_name) {
                 self.prop_infos.push(PropInfo {
                     id: someid,
                     prop_type: PropType::Button,
-                    prop_name: button_name.to_string(),
-                    prop_friendly_name: button_name.to_string(),
+                    prop_name: button_name.to_owned(),
+                    prop_friendly_name: button_name.to_owned(),
                     is_player_prop: true,
                 });
                 someid += 1;
             }
-            if let Some(wanted_state) = self.wanted_prop_states.get(&button_name.to_string()) {
+            if let Some(wanted_state) = self.wanted_prop_states.get(&button_name) {
                 self.wanted_prop_state_infos.push(WantedPropStateInfo {
                     base: PropInfo {
                         id: someid2,
                         prop_type: PropType::Button,
-                        prop_name: button_name.to_string(),
-                        prop_friendly_name: button_name.to_string(),
+                        prop_name: button_name.to_owned(),
+                        prop_friendly_name: button_name,
                         is_player_prop: true,
                     },
                     wanted_prop_state: wanted_state.clone(),
@@ -176,30 +178,23 @@ impl PropController {
         }
 
         for (custom_prop_name, custom_prop_id) in CUSTOM_PLAYER_PROP_IDS.entries() {
-            if self.wanted_player_props.contains(&custom_prop_name.to_string()) {
+            let custom_prop_name = custom_prop_name.to_string();
+            if self.wanted_player_props.contains(&custom_prop_name) {
                 self.prop_infos.push(PropInfo {
                     id: *custom_prop_id,
-                    prop_type: *TYPEHM.get(custom_prop_name).unwrap_or(&PropType::Custom),
-                    prop_name: custom_prop_name.to_string(),
-                    prop_friendly_name: self
-                        .real_name_to_og_name
-                        .get(&custom_prop_name.to_string())
-                        .unwrap_or(&custom_prop_name.to_string())
-                        .to_string(),
+                    prop_type: *TYPEHM.get(&custom_prop_name).unwrap_or(&PropType::Custom),
+                    prop_friendly_name: self.get_friendly_name(&custom_prop_name),
+                    prop_name: custom_prop_name.to_owned(),
                     is_player_prop: true,
                 })
             }
-            if let Some(wanted_state) = self.wanted_prop_states.get(&custom_prop_name.to_string()) {
+            if let Some(wanted_state) = self.wanted_prop_states.get(&custom_prop_name) {
                 self.wanted_prop_state_infos.push(WantedPropStateInfo {
                     base: PropInfo {
                         id: *custom_prop_id,
-                        prop_type: *TYPEHM.get(custom_prop_name).unwrap_or(&PropType::Custom),
-                        prop_name: custom_prop_name.to_string(),
-                        prop_friendly_name: self
-                            .real_name_to_og_name
-                            .get(&custom_prop_name.to_string())
-                            .unwrap_or(&custom_prop_name.to_string())
-                            .to_string(),
+                        prop_type: *TYPEHM.get(&custom_prop_name).unwrap_or(&PropType::Custom),
+                        prop_friendly_name: self.get_friendly_name(&custom_prop_name),
+                        prop_name: custom_prop_name,
                         is_player_prop: true,
                     },
                     wanted_prop_state: wanted_state.clone(),
@@ -207,34 +202,35 @@ impl PropController {
             }
         }
 
-        if self.wanted_player_props.contains(&"game_time".to_string()) {
+        let game_time_prop_name = "game_time".to_string();
+        if self.wanted_player_props.contains(&game_time_prop_name) {
             self.prop_infos.push(PropInfo {
                 id: GAME_TIME_ID,
                 prop_type: PropType::GameTime,
-                prop_name: "game_time".to_string(),
-                prop_friendly_name: "game_time".to_string(),
+                prop_name: game_time_prop_name.to_owned(),
+                prop_friendly_name: game_time_prop_name.to_owned(),
                 is_player_prop: true,
             });
         }
-        if let Some(wanted_state) = self.wanted_prop_states.get(&"game_time".to_string()) {
+        if let Some(wanted_state) = self.wanted_prop_states.get(&game_time_prop_name) {
             self.wanted_prop_state_infos.push(WantedPropStateInfo {
                 base: PropInfo {
                     id: GAME_TIME_ID,
                     prop_type: PropType::GameTime,
-                    prop_name: "game_time".to_string(),
-                    prop_friendly_name: "game_time".to_string(),
+                    prop_name: game_time_prop_name.to_owned(),
+                    prop_friendly_name: game_time_prop_name.to_owned(),
                     is_player_prop: true,
                 },
                 wanted_prop_state: wanted_state.clone(),
             });
         }
         // Can also be non-player prop
-        if self.wanted_other_props.contains(&"game_time".to_string()) {
+        if self.wanted_other_props.contains(&game_time_prop_name) {
             self.prop_infos.push(PropInfo {
                 id: GAME_TIME_ID,
                 prop_type: PropType::GameTime,
-                prop_name: "game_time".to_string(),
-                prop_friendly_name: "game_time".to_string(),
+                prop_name: game_time_prop_name.to_owned(),
+                prop_friendly_name: game_time_prop_name,
                 is_player_prop: false,
             });
         }
@@ -262,120 +258,101 @@ impl PropController {
     }
 
     pub fn find_prop_name_paths(&mut self, ser: &mut Serializer) {
-        self.traverse_fields(&mut ser.fields, &ser.name, vec![])
+        self.traverse_fields(&mut ser.fields, &ser.name)
     }
 
-    fn set_id(&mut self, prop_name: &str, f: &mut ValueField, is_grenade_or_weapon: bool) {
-        match self.name_to_id.get(prop_name) {
-            // If we already have an id for prop of same name then use that id.
-            // Mainly for weapon props. For example CAK47.m_iClip1 and CWeaponSCAR20.m_iClip1
-            // are the "same" prop. (they have same path and we want to refer to it with one id not ~20)
-            Some(id) => {
-                f.prop_id = *id;
-            }
-            None => {
-                self.name_to_id.insert(prop_name.to_string(), self.id);
-                f.prop_id = self.id;
-                self.insert_propinfo(prop_name, f);
-                self.set_special_ids(prop_name, is_grenade_or_weapon, Some(f.prop_id));
-            }
+    fn set_id(&mut self, prop_name: &String, f: &mut ValueField, is_grenade_or_weapon: bool) {
+        // If we already have an id for prop of same name then use that id.
+        // Mainly for weapon props. For example CAK47.m_iClip1 and CWeaponSCAR20.m_iClip1
+        // are the "same" prop. (they have same path and we want to refer to it with one id not ~20)
+        if let Some(id) = self.name_to_id.get(prop_name) {
+            f.prop_id = *id;
+            return;
         }
+
+        f.prop_id = self.id;
+        self.name_to_id.insert(prop_name.to_string(), f.prop_id);
         self.id_to_name.insert(f.prop_id, prop_name.to_string());
+        self.insert_propinfo(prop_name, f);
+        self.set_special_ids(prop_name, is_grenade_or_weapon, Some(f.prop_id));
+
+        self.id += 1;
     }
 
-    fn insert_propinfo(&mut self, prop_name: &str, f: &mut ValueField) {
-        if let Some(prop_type) = TYPEHM.get(prop_name) {
-            if self.wanted_player_props.contains(&prop_name.to_string()) {
-                self.prop_infos.push(PropInfo {
-                    id: f.prop_id,
-                    prop_type: *prop_type,
-                    prop_name: prop_name.to_string(),
-                    prop_friendly_name: self
-                        .real_name_to_og_name
-                        .get(&prop_name.to_string())
-                        .unwrap_or(&prop_name.to_string())
-                        .to_string(),
-                    is_player_prop: true,
-                })
-            }
-            if self.wanted_other_props.contains(&prop_name.to_string()) {
-                self.prop_infos.push(PropInfo {
-                    id: f.prop_id,
-                    prop_type: *prop_type,
-                    prop_name: prop_name.to_string(),
-                    prop_friendly_name: self
-                        .real_name_to_og_name
-                        .get(&prop_name.to_string())
-                        .unwrap_or(&prop_name.to_string())
-                        .to_string(),
-                    is_player_prop: false,
-                })
-            }
-            if let Some(wanted_state) = self.wanted_prop_states.get(&prop_name.to_string()) {
-                self.wanted_prop_state_infos.push(WantedPropStateInfo {
-                    base: PropInfo {
-                        id: f.prop_id,
-                        prop_type: *prop_type,
-                        prop_name: prop_name.to_string(),
-                        prop_friendly_name: self
-                            .real_name_to_og_name
-                            .get(&prop_name.to_string())
-                            .unwrap_or(&prop_name.to_string())
-                            .to_string(),
-                        is_player_prop: true,
-                    },
-                    wanted_prop_state: wanted_state.clone(),
-                });
-            }
+    fn insert_propinfo(&mut self, prop_name: &String, f: &mut ValueField) {
+        let Some(prop_type) = TYPEHM.get(prop_name) else { return };
+
+        if self.wanted_player_props.contains(prop_name) {
+            self.prop_infos.push(PropInfo {
+                id: f.prop_id,
+                prop_type: *prop_type,
+                prop_name: prop_name.to_owned(),
+                prop_friendly_name: self.get_friendly_name(prop_name),
+                is_player_prop: true,
+            })
         }
+        if self.wanted_other_props.contains(prop_name) {
+            self.prop_infos.push(PropInfo {
+                id: f.prop_id,
+                prop_type: *prop_type,
+                prop_name: prop_name.to_owned(),
+                prop_friendly_name: self.get_friendly_name(prop_name),
+                is_player_prop: false,
+            })
+        }
+
+        let Some(wanted_state) = self.wanted_prop_states.get(prop_name) else { return };
+        self.wanted_prop_state_infos.push(WantedPropStateInfo {
+            base: PropInfo {
+                id: f.prop_id,
+                prop_type: *prop_type,
+                prop_name: prop_name.to_owned(),
+                prop_friendly_name: self.get_friendly_name(prop_name),
+                is_player_prop: true,
+            },
+            wanted_prop_state: wanted_state.clone(),
+        });
     }
 
-    fn handle_prop(&mut self, ser_name: &str, f: &mut ValueField, path: Vec<i32>) {
-        f.full_name = ser_name.to_owned() + "." + &f.name;
+    #[inline(always)]
+    fn get_friendly_name(&self, prop_name: &String) -> String {
+        self.real_name_to_og_name
+            .get(prop_name)
+            .unwrap_or(prop_name)
+            .to_owned()
+    }
+
+    fn handle_prop(&mut self, ser_name: &str, f: &mut ValueField) {
         f.should_parse = true;
+        let full_name = ser_name.to_owned() + "." + &f.name;
 
         // CAK47.m_iClip1 => ["CAK47", "m_iClip1"]
-        let name_parts: Vec<&str> = f.full_name.split(".").collect();
-        let is_player = name_parts[0].contains("Player");
-        let is_weapon_prop = !is_player && (name_parts[0].contains("Weapon") || name_parts[0].contains("AK"))
-            || name_parts[0].contains("Knife")
-            || name_parts[0].contains("CDEagle")
-            || name_parts[0].contains("C4")
-            || name_parts[0].contains("Molo")
-            || name_parts[0].contains("Inc")
-            || name_parts[0].contains("Infer");
-
-        let is_projectile_prop = !is_player && (name_parts[0].contains("Projectile") || name_parts[0].contains("Grenade") || name_parts[0].contains("Flash"));
+        let name_parts: Vec<&str> = full_name.split(".").collect();
+        let is_player = PLAYER_AC.is_match(name_parts[0]);
+        let is_weapon_prop = !is_player && WEAPON_AC.is_match(name_parts[0]) || WEAPON_TYPE_AC.is_match(name_parts[0]);
+        let is_projectile_prop = !is_player && GRENADE_AC.is_match(name_parts[0]);
         let is_grenade_or_weapon = is_weapon_prop || is_projectile_prop;
 
         // Strip first part of name from grenades and weapons.
         // if weapon prop: CAK47.m_iClip1 => m_iClip1
         // if grenade: CSmokeGrenadeProjectile.CBodyComponentBaseAnimGraph.m_cellX => CBodyComponentBaseAnimGraph.m_cellX
         let prop_name = if is_grenade_or_weapon {
-            name_parts[1..].join(".")
+            &name_parts[1..].join(".")
         } else {
-            f.full_name.to_owned()
+            &full_name
         };
-        self.set_id(&prop_name, f, is_grenade_or_weapon);
-
-        match f.full_name.as_str() {
+        self.set_id(prop_name, f, is_grenade_or_weapon);
+        
+        match full_name.as_str() {
             "CCSPlayerPawn.CCSPlayer_WeaponServices.m_hMyWeapons" => f.prop_id = MY_WEAPONS_OFFSET,
             "CCSPlayerPawn.CCSPlayer_ActionTrackingServices.WeaponPurchaseCount_t.m_nCount" => f.prop_id = ITEM_PURCHASE_COUNT,
             "CCSPlayerPawn.CCSPlayer_ActionTrackingServices.WeaponPurchaseCount_t.m_nItemDefIndex" => f.prop_id = ITEM_PURCHASE_NEW_DEF_IDX,
             "CCSPlayerPawn.CCSPlayer_BuyServices.SellbackPurchaseEntry_t.m_unDefIdx" => f.prop_id = ITEM_PURCHASE_DEF_IDX,
             "CCSPlayerPawn.CCSPlayer_BuyServices.SellbackPurchaseEntry_t.m_nCost" => f.prop_id = ITEM_PURCHASE_COST,
             "CCSPlayerPawn.CCSPlayer_BuyServices.SellbackPurchaseEntry_t.m_hItem" => f.prop_id = ITEM_PURCHASE_HANDLE,
-            _ => if prop_name.contains("CEconItemAttribute.m_iRawValue32") {
-                f.prop_id = WEAPON_SKIN_ID
-            },
+            _ if WEAPON_SKIN_AC.is_match(prop_name) => f.prop_id = WEAPON_SKIN_ID,
+            _ => {}
         };
-
-        let mut a = [0; 7];
-        for (idx, v) in path.iter().enumerate() {
-            a[idx] = *v;
-        }
-        self.path_to_name.insert(a, prop_name);
-        self.id += 1;
     }
 
     #[inline(always)]
@@ -423,44 +400,38 @@ impl PropController {
                 "CCSPlayerPawn.m_iTeamNum" => self.special_ids.player_team_pointer = id,
                 "CCSPlayerPawn.m_lifeState" => self.special_ids.life_state = id,
                 "CCSPlayerPawn.m_bInBuyZone" => self.special_ids.in_buy_zone = id,
-                "CCSPlayerPawn.m_hGroundEntity" => self.special_ids.is_airborn = id,
+                "CCSPlayerPawn.m_hGroundEntity" => self.special_ids.is_airborne = id,
                 _ => {}
             };
         }
     }
 
-    fn traverse_fields(&mut self, fields: &mut [Field], ser_name: &str, path_og: Vec<i32>) {
-        for (idx, f) in fields.iter_mut().enumerate() {
-            let mut path = path_og.clone();
-            path.push(idx as i32);
-            match f {
-                Field::Value(f) => self.handle_prop(ser_name, f, path),
-                Field::Serializer(ser) => self.traverse_fields(&mut ser.serializer.fields, &(ser_name.to_owned() + "." + &ser.serializer.name), path),
-                Field::Pointer(ser) => self.traverse_fields(&mut ser.serializer.fields, &(ser_name.to_owned() + "." + &ser.serializer.name), path),
-                Field::Array(ser) => {
-                    if let Field::Value(f) = &mut ser.field_enum.as_mut() {
-                        self.handle_prop(ser_name, f, path);
+    fn traverse_fields(&mut self, fields: &mut [Field], ser_name: &str) {
+        for field in fields.iter_mut() {
+            match field {
+                Field::Value(f) => self.handle_prop(ser_name, f),
+                Field::Serializer(f) => self.traverse_fields(&mut f.serializer.fields, &(ser_name.to_owned() + "." + &f.serializer.name)),
+                Field::Pointer(f) => self.traverse_fields(&mut f.serializer.fields, &(ser_name.to_owned() + "." + &f.serializer.name)),
+                Field::Array(f) => {
+                    if let Field::Value(f) = &mut f.field_enum.as_mut() {
+                        self.handle_prop(ser_name, f);
                     }
                 },
                 Field::Vector(_) => {
-                    match f.get_inner_mut(0) {
-                        Ok(Field::Serializer(s)) => {
-                            for (inner_idx, f) in &mut s.serializer.fields.iter_mut().enumerate() {
+                    match field.get_inner_mut(0) {
+                        Ok(Field::Value(f)) => self.handle_prop(ser_name, f),
+                        Ok(Field::Serializer(f)) => {
+                            for f in &mut f.serializer.fields.iter_mut() {
                                 if let Field::Value(f) = f {
-                                    let mut inner_path = path.clone();
-                                    inner_path.push(inner_idx as i32);
-                                    self.handle_prop(ser_name, f, inner_path);
+                                    self.handle_prop(ser_name, f);
                                 }
                             }
-                            self.traverse_fields(&mut s.serializer.fields, &(ser_name.to_owned() + "." + &s.serializer.name), path_og.clone())
-                        },
-                        Ok(Field::Value(f)) => {
-                            self.handle_prop(ser_name, f, path);
+                            self.traverse_fields(&mut f.serializer.fields, &(ser_name.to_owned() + "." + &f.serializer.name))
                         },
                         _ => {},
                     }
                 }
-                _ => {}
+                Field::None => {}
             }
         }
     }

@@ -1,81 +1,69 @@
-use crate::definitions::Class;
 use crate::definitions::DemoParserError;
 use crate::definitions::HEADER_ENDS_AT_BYTE;
 use crate::first_pass::frameparser::DemoChunk;
 use crate::first_pass::parser::FirstPassOutput;
+use crate::first_pass::parser_settings::ParserInputs;
 use crate::first_pass::prop_controller::PropController;
 use crate::first_pass::sendtables::Serializer;
-use crate::first_pass::stringtables::StringTable;
 use crate::first_pass::stringtables::UserInfo;
 use crate::second_pass::collect_data::ProjectileRecord;
 use crate::second_pass::decoder::QfMapper;
 use crate::second_pass::entities::Entity;
 use crate::second_pass::entities::PlayerMetaData;
 use crate::second_pass::game_events::GameEvent;
-use crate::second_pass::parser::SecondPassOutput;
 use crate::second_pass::path_ops::FieldPath;
 use crate::second_pass::variants::PropColumn;
 use crate::serde_helper::as_string;
 use ahash::AHashMap;
 use ahash::AHashSet;
 use csgoproto::csvc_msg_game_event_list::DescriptorT;
+use csgoproto::CDemoPacket;
 use csgoproto::CsvcMsgVoiceData;
+use nohash::IntMap;
+use nohash::IntSet;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::env;
 
-const HUF_LOOKUPTABLE_MAXVALUE: u32 = (1 << 17) - 1;
 const DEFAULT_MAX_ENTITY_ID: usize = 1024;
 
 pub struct SecondPassParser<'a> {
-    pub demo_chunk: Option<DemoChunk>,
-    pub qf_mapper: &'a QfMapper,
-    pub prop_controller: &'a PropController,
-    pub cls_by_id: &'a Vec<Class>,
-    pub stringtable_players: BTreeMap<i32, UserInfo>,
-    pub net_tick: f32,
-    pub parse_inventory: bool,
-    pub paths: Vec<FieldPath>,
-    pub ptr: usize,
-    pub parse_all_packets: bool,
-    pub ge_list: &'a AHashMap<i32, DescriptorT>,
-    pub serializers: AHashMap<String, Serializer>,
-    pub cls_bits: Option<u32>,
-    pub entities: Vec<Option<Entity>>,
-    pub tick: i32,
-    pub players: BTreeMap<i32, PlayerMetaData>,
-    pub teams: Teams,
-    pub huffman_lookup_table: &'a [(u8, u8)],
-    pub game_events: Vec<GameEvent>,
-    pub string_tables: Vec<StringTable>,
-    pub rules_entity_id: Option<i32>,
+    pub baselines: &'a AHashMap<u32, Vec<u8>>,
     pub c4_entity_id: Option<i32>,
+    pub demo_chunk: Option<DemoChunk>,
+    pub entities: Vec<Option<Entity>>,
     pub game_events_counter: AHashSet<String>,
-    pub baselines: AHashMap<u32, Vec<u8>>,
+    pub game_events: Vec<GameEvent>,
+    pub ge_list: &'a AHashMap<i32, DescriptorT>,
+    pub net_tick: f32,
+    pub paths: Vec<FieldPath>,
+    pub players: BTreeMap<i32, PlayerMetaData>,
     pub projectiles: BTreeSet<i32>,
-    pub need_parse_fullpacket: bool,
-    pub wanted_players: AHashSet<u64>,
-    pub wanted_ticks: AHashSet<i32>,
+    pub prop_controller: &'a PropController,
+    pub ptr: usize,
+    pub qf_mapper: &'a QfMapper,
+    pub rules_entity_id: Option<i32>,
+    pub serializer_by_cls_id: &'a Vec<Serializer>,
+    pub stringtable_players: &'a BTreeMap<i32, UserInfo>,
+    pub fullpackets: &'a IntMap<usize, Option<CDemoPacket>>,
+    pub teams: Teams,
+    pub tick: i32,
     // Output from parsing
-    pub projectile_records: Vec<ProjectileRecord>,
-    pub voice_data: Vec<CsvcMsgVoiceData>,
-    pub output: AHashMap<u32, PropColumn>,
-    pub header: AHashMap<String, String>,
-    pub skins: Vec<EconItem>,
+    pub prop_data_per_player: AHashMap<u64, AHashMap<u32, PropColumn>>,
     pub item_drops: Vec<EconItem>,
-    pub convars: AHashMap<String, String>,
-    pub chat_messages: Vec<ChatMessageRecord>,
+    pub prop_data: AHashMap<u32, PropColumn>,
     pub player_end_data: Vec<PlayerEndMetaData>,
+    pub projectile_records: Vec<ProjectileRecord>,
+    pub skins: Vec<EconItem>,
+    pub voice_data: Vec<CsvcMsgVoiceData>,
+    pub wanted_players: &'a IntSet<u64>,
+    pub wanted_ticks: &'a IntSet<i32>,
     // Settings
-    pub wanted_events: Vec<String>,
-    pub parse_entities: bool,
-    pub parse_projectiles: bool,
     pub is_debug_mode: bool,
-    pub df_per_player: AHashMap<u64, AHashMap<u32, PropColumn>>,
-    pub order_by_steamid: bool,
-    pub last_tick: i32,
     pub parse_usercmd: bool,
+    pub settings: &'a ParserInputs,
+    pub has_wanted_events: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -83,15 +71,6 @@ pub struct Teams {
     pub team1_entid: Option<i32>,
     pub team2_entid: Option<i32>,
     pub team3_entid: Option<i32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChatMessageRecord {
-    pub entity_idx: Option<i32>,
-    pub param1: Option<String>,
-    pub param2: Option<String>,
-    pub param3: Option<String>,
-    pub param4: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -124,49 +103,21 @@ pub struct PlayerEndMetaData {
 }
 
 impl<'a> SecondPassParser<'a> {
-    pub fn create_output(self) -> SecondPassOutput {
-        SecondPassOutput {
-            voice_data: self.voice_data,
-            chat_messages: self.chat_messages,
-            convars: self.convars,
-            df: self.output,
-            game_events: self.game_events,
-            skins: self.skins,
-            item_drops: self.item_drops,
-            header: None,
-            player_md: self.player_end_data,
-            game_events_counter: self.game_events_counter,
-            prop_info: PropController::new(
-                vec![],
-                vec![],
-                AHashMap::default(),
-                AHashMap::default(),
-                false,
-                &["none".to_string()],
-            ),
-            projectiles: self.projectile_records,
-            ptr: self.ptr,
-            df_per_player: self.df_per_player,
-            entities: self.entities,
-            last_tick: self.tick,
-        }
-    }
-
     pub fn new(
-        first_pass_output: FirstPassOutput<'a>,
-        offset: usize,
-        parse_all_packets: bool,
+        settings: &'a ParserInputs,
+        first_pass_output: &'a FirstPassOutput,
         demo_chunk: Option<DemoChunk>,
     ) -> Result<Self, DemoParserError> {
         let args: Vec<String> = env::args().collect();
         let debug = if args.len() > 2 { args[2] == "true" } else { false };
 
+        let ptr = demo_chunk.map(|c| c.start).unwrap_or(HEADER_ENDS_AT_BYTE);
+
         Ok(SecondPassParser {
-            parse_usercmd: contains_usercmd_prop(&first_pass_output.settings.wanted_player_props),
-            last_tick: 0,
+            settings,
+            parse_usercmd: contains_usercmd_prop(&settings.wanted_player_props),
             demo_chunk,
-            order_by_steamid: first_pass_output.order_by_steamid,
-            df_per_player: AHashMap::default(),
+            prop_data_per_player: AHashMap::default(),
             voice_data: vec![],
             paths: vec![
                 FieldPath {
@@ -175,44 +126,33 @@ impl<'a> SecondPassParser<'a> {
                 };
                 8192
             ],
-            parse_inventory: first_pass_output.prop_controller.wanted_player_props.contains(&"inventory".to_string()),
             net_tick: 0.0,
             c4_entity_id: None,
-            stringtable_players: first_pass_output.stringtable_players,
+            stringtable_players: &first_pass_output.stringtable_players,
             is_debug_mode: debug,
             projectile_records: vec![],
-            parse_all_packets,
-            wanted_players: first_pass_output.wanted_players.clone(),
-            wanted_ticks: first_pass_output.wanted_ticks.clone(),
-            prop_controller: first_pass_output.prop_controller,
-            qf_mapper: first_pass_output.qfmap,
-            need_parse_fullpacket: offset != HEADER_ENDS_AT_BYTE,
-            serializers: AHashMap::default(),
-            ptr: offset,
-            ge_list: first_pass_output.ge_list,
-            cls_by_id: first_pass_output.cls_by_id,
+            prop_controller: &first_pass_output.prop_controller,
+            qf_mapper: &first_pass_output.qfmap,
+            ptr,
+            ge_list: &first_pass_output.ge_list,
+            serializer_by_cls_id: &first_pass_output.serializer_by_cls_id,
             entities: vec![None; DEFAULT_MAX_ENTITY_ID],
-            cls_bits: None,
             tick: -99999,
             players: BTreeMap::default(),
-            output: AHashMap::default(),
+            prop_data: AHashMap::default(),
             game_events: vec![],
-            wanted_events: first_pass_output.settings.wanted_events.clone(),
-            parse_entities: first_pass_output.settings.parse_ents,
             projectiles: BTreeSet::default(),
-            baselines: first_pass_output.baselines.clone(),
-            string_tables: first_pass_output.string_tables.clone(),
+            baselines: &first_pass_output.baselines,
+            fullpackets: &first_pass_output.fullpackets,
             teams: Teams::default(),
             game_events_counter: AHashSet::default(),
-            parse_projectiles: first_pass_output.settings.parse_projectiles,
             rules_entity_id: None,
-            convars: AHashMap::default(),
-            chat_messages: vec![],
             item_drops: vec![],
             skins: vec![],
             player_end_data: vec![],
-            huffman_lookup_table: first_pass_output.settings.huffman_lookup_table,
-            header: AHashMap::default(),
+            has_wanted_events: !settings.wanted_events.is_empty(),
+            wanted_players: &first_pass_output.wanted_players,
+            wanted_ticks: &first_pass_output.wanted_ticks,
         })
     }
 }
@@ -274,16 +214,7 @@ pub struct SpecialIDs {
     pub in_buy_zone: Option<u32>,
     pub custom_name: Option<u32>,
 
-    pub is_airborn: Option<u32>,
-}
-
-pub fn create_huffman_lookup_table() -> Vec<(u8, u8)> {
-    let buf = include_bytes!("huf.b");
-    let mut huf2 = Vec::with_capacity(HUF_LOOKUPTABLE_MAXVALUE as usize);
-    for chunk in buf.chunks_exact(2) {
-        huf2.push((chunk[0], chunk[1]));
-    }
-    huf2
+    pub is_airborne: Option<u32>,
 }
 
 fn contains_usercmd_prop(names: &[String]) -> bool {

@@ -24,6 +24,7 @@ use csgoproto::CUserMessageSayText;
 use csgoproto::CUserMessageSayText2;
 use itertools::Itertools;
 use prost::Message;
+use serde::ser::SerializeMap;
 use serde::Serialize;
 
 static INTERNALEVENTFIELDS: &[&str] = &[
@@ -78,7 +79,7 @@ impl<'a> SecondPassParser<'a> {
         }
 
         // Return early if this is not a wanted event.
-        if !self.wanted_events.contains(&event_desc.name().to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event(event_desc.name()) {
             return Ok(None);
         }
         if REMOVEDEVENTS.contains(&event_desc.name()) {
@@ -112,12 +113,11 @@ impl<'a> SecondPassParser<'a> {
         event_fields.retain(|x| !INTERNALEVENTFIELDS.contains(&x.name.as_str()));
         event_fields.iter_mut().for_each(|field| self.cleanups(field));
 
-        let event = GameEvent {
+        self.game_events.push(GameEvent {
             fields: event_fields,
             name: event_desc.name().to_string(),
             tick: self.tick,
-        };
-        self.game_events.push(event);
+        });
         Ok(None)
     }
 
@@ -132,16 +132,12 @@ impl<'a> SecondPassParser<'a> {
         }
     }
 
-    pub fn resolve_wrong_order_event(&mut self, events: &mut Vec<GameEvent>) -> Result<(), DemoParserError> {
-        for event in events {
+    pub fn resolve_wrong_order_event(&mut self, events: Vec<GameEvent>) -> Result<(), DemoParserError> {
+        for mut event in events {
             event.fields.extend(self.find_extra(&event.fields)?);
             // Remove fields that user does nothing with like userid and user_pawn
             event.fields.retain(|x| !INTERNALEVENTFIELDS.contains(&x.name.as_str()));
-            let event = GameEvent {
-                fields: event.fields.clone(),
-                name: event.name.to_string(),
-                tick: self.tick,
-            };
+            event.tick = self.tick;
             self.game_events.push(event);
         }
         Ok(())
@@ -170,7 +166,7 @@ impl<'a> SecondPassParser<'a> {
         None
     }
 
-    fn find_extra(&self, fields: &Vec<EventField>) -> Result<Vec<EventField>, DemoParserError> {
+    fn find_extra(&self, fields: &[EventField]) -> Result<Vec<EventField>, DemoParserError> {
         // Always add tick to event
         let mut extra_fields = vec![
             EventField {
@@ -179,6 +175,8 @@ impl<'a> SecondPassParser<'a> {
             }
         ];
 
+        let has_userid = fields.iter().any(|x| x.name == "userid");
+        let has_userid_or_entityid = has_userid || fields.iter().any(|x| x.name == "entityid");
         for field in fields {
             let Some(Variant::I32(id)) = field.data else { continue };
 
@@ -189,21 +187,15 @@ impl<'a> SecondPassParser<'a> {
                 "assister" => "assister",
                 "victim" => "victim",
                 // edge case in some events
-                "entityid" => {
-                    if fields.iter().any(|x| x.name == "userid") { continue };
-                    "user"
-                }
+                "entityid" if !has_userid => "user",
                 // Another edge case
-                // Only add iff "userid" is missing in the event...
-                "userid_pawn" => {
-                    if fields.iter().any(|x| x.name == "userid" || x.name == "entityid") { continue };
-                    "user"
-                }
+                // Only add if "userid" and "entityid" are missing in the event...
+                "userid_pawn" if !has_userid_or_entityid => "user",
                 _ => continue,
             };
 
             let entity_id = match field.name.as_str() {
-                "entityid" => self.grenade_owner_entid_from_grenade(&field.data),
+                "entityid" => self.grenade_owner_entid_from_grenade(id),
                 "userid_pawn" => self.entity_id_from_user_pawn(id),
                 _ => self.entity_id_from_userid(id),
             };
@@ -224,12 +216,10 @@ impl<'a> SecondPassParser<'a> {
         Some(pawn_handle & 0x7FF)
     }
 
-    fn grenade_owner_entid_from_grenade(&self, id_field: &Option<Variant>) -> Option<i32> {
+    fn grenade_owner_entid_from_grenade(&self, id: i32) -> Option<i32> {
         let prop_id = self.prop_controller.special_ids.grenade_owner_id?;
-        if let Some(Variant::I32(id)) = id_field {
-            if let Ok(Variant::U32(entity_id)) = self.get_prop_from_ent(&prop_id, id) {
-                return Some((entity_id & 0x7FF) as i32);
-            }
+        if let Ok(Variant::U32(entity_id)) = self.get_prop_from_ent(&prop_id, &id) {
+            return Some((entity_id & 0x7FF) as i32);
         }
         None
     }
@@ -352,9 +342,14 @@ impl<'a> SecondPassParser<'a> {
         None
     }
 
+    #[inline(always)]
+    fn should_create_event(&self, event_name: &str) -> bool {
+        self.settings.wanted_events.contains(&event_name.to_string()) || self.settings.wanted_events.first().is_some_and(|e| e == "all")
+    }
+
     pub fn create_custom_event_parse_convars(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("server_cvar".to_string());
-        if !self.wanted_events.contains(&"server_cvar".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("server_cvar") {
             return Ok(());
         }
 
@@ -380,12 +375,12 @@ impl<'a> SecondPassParser<'a> {
                 data: Some(Variant::I32(self.tick)),
                 name: "tick".to_string(),
             });
-            let ge = GameEvent {
+
+            self.game_events.push(GameEvent {
                 name: "server_cvar".to_string(),
                 fields,
                 tick: self.tick,
-            };
-            self.game_events.push(ge);
+            });
         }
         Ok(())
     }
@@ -470,12 +465,12 @@ impl<'a> SecondPassParser<'a> {
             ];
             fields.extend(self.find_extra_props_events(*entid, "user"));
             fields.extend(self.find_non_player_props());
-            let ge = GameEvent {
+
+            self.game_events.push(GameEvent {
                 name: "item_sold".to_string(),
                 fields,
                 tick: self.tick,
-            };
-            self.game_events.push(ge);
+            });
             self.game_events_counter.insert("item_sold".to_string());
         }
     }
@@ -533,7 +528,7 @@ impl<'a> SecondPassParser<'a> {
 
     fn create_custom_event_weapon_purchase(&mut self, events: &[GameEventInfo]) {
         self.game_events_counter.insert("item_purchase".to_string());
-        if !self.wanted_events.contains(&"item_purchase".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("item_purchase") {
             return;
         }
 
@@ -598,12 +593,12 @@ impl<'a> SecondPassParser<'a> {
             });
             fields.extend(self.find_extra_props_events(purchase.entid, "user"));
             fields.extend(self.find_non_player_props());
-            let ge = GameEvent {
+
+            self.game_events.push(GameEvent {
                 name: "item_purchase".to_string(),
                 fields,
                 tick: self.tick,
-            };
-            self.game_events.push(ge);
+            });
         }
     }
 
@@ -636,7 +631,7 @@ impl<'a> SecondPassParser<'a> {
 
     fn create_custom_event_round_end(&mut self, events: &[GameEventInfo]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("round_end".to_string());
-        if !self.wanted_events.contains(&"round_end".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("round_end") {
             return Ok(());
         }
 
@@ -665,19 +660,19 @@ impl<'a> SecondPassParser<'a> {
                 }
             ];
             fields.extend(self.find_non_player_props());
-            let ge = GameEvent {
+
+            self.game_events.push(GameEvent {
                 name: "round_end".to_string(),
                 fields,
                 tick: self.tick,
-            };
-            self.game_events.push(ge);
+            });
         }
         Ok(())
     }
 
     fn create_custom_event_round_officially_ended(&mut self, _events: &[GameEventInfo]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("round_officially_ended".to_string());
-        if !self.wanted_events.contains(&"round_officially_ended".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("round_officially_ended") {
             return Ok(());
         }
 
@@ -695,19 +690,18 @@ impl<'a> SecondPassParser<'a> {
             data: Some(Variant::I32(self.tick)),
             name: "tick".to_string(),
         });
-        let ge = GameEvent {
+
+        self.game_events.push(GameEvent {
             name: "round_officially_ended".to_string(),
             fields,
             tick: self.tick,
-        };
-        self.game_events.push(ge);
-
+        });
         Ok(())
     }
 
     fn create_custom_event_match_end(&mut self, _events: &[GameEventInfo]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("cs_win_panel_match".to_string());
-        if !self.wanted_events.contains(&"cs_win_panel_match".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("cs_win_panel_match") {
             return Ok(());
         }
 
@@ -716,13 +710,12 @@ impl<'a> SecondPassParser<'a> {
             data: Some(Variant::I32(self.tick)),
             name: "tick".to_string(),
         });
-        let ge = GameEvent {
+
+        self.game_events.push(GameEvent {
             name: "cs_win_panel_match".to_string(),
             fields,
             tick: self.tick,
-        };
-        self.game_events.push(ge);
-
+        });
         Ok(())
     }
 
@@ -738,7 +731,7 @@ impl<'a> SecondPassParser<'a> {
 
     pub fn create_custom_event_chat_message(&mut self, msg_bytes: &[u8]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("chat_message".to_string());
-        if !self.wanted_events.contains(&"chat_message".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("chat_message") {
             return Ok(());
         }
 
@@ -760,18 +753,18 @@ impl<'a> SecondPassParser<'a> {
         fields.extend(self.create_player_fields(entity_id, "user"));
         fields.extend(self.find_extra_props_events(entity_id, "user"));
         fields.extend(self.find_non_player_props());
-        let ge = GameEvent {
+
+        self.game_events.push(GameEvent {
             name: "chat_message".to_string(),
             fields,
             tick: self.tick,
-        };
-        self.game_events.push(ge);
+        });
         Ok(())
     }
 
     pub fn create_custom_event_server_message(&mut self, msg_bytes: &[u8]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("server_message".to_string());
-        if !self.wanted_events.contains(&"server_message".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("server_message") {
             return Ok(());
         }
 
@@ -787,18 +780,18 @@ impl<'a> SecondPassParser<'a> {
             }
         ];
         fields.extend(self.find_non_player_props());
-        let ge = GameEvent {
+
+        self.game_events.push(GameEvent {
             name: "server_message".to_string(),
             fields,
             tick: self.tick,
-        };
-        self.game_events.push(ge);
+        });
         Ok(())
     }
 
     fn create_custom_event_round_start(&mut self, _events: &[GameEventInfo]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("round_start".to_string());
-        if !self.wanted_events.contains(&"round_start".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("round_start") {
             return Ok(());
         }
 
@@ -813,18 +806,18 @@ impl<'a> SecondPassParser<'a> {
             }
         ];
         fields.extend(self.find_non_player_props());
-        let ge = GameEvent {
+
+        self.game_events.push(GameEvent {
             name: "round_start".to_string(),
             fields,
             tick: self.tick,
-        };
-        self.game_events.push(ge);
+        });
         Ok(())
     }
 
     pub fn create_custom_event_rank_update(&mut self, msg_bytes: &[u8]) -> Result<(), DemoParserError> {
         self.game_events_counter.insert("rank_update".to_string());
-        if !self.wanted_events.contains(&"rank_update".to_string()) && self.wanted_events.first() != Some(&"all".to_string()) {
+        if !self.should_create_event("rank_update") {
             return Ok(());
         }
 
@@ -862,12 +855,12 @@ impl<'a> SecondPassParser<'a> {
             fields.extend(self.create_player_fields(entity_id, "user"));
             fields.extend(self.find_extra_props_events(entity_id, "user"));
             fields.extend(self.find_non_player_props());
-            let ge = GameEvent {
+
+            self.game_events.push(GameEvent {
                 name: "rank_update".to_string(),
                 fields,
                 tick: self.tick,
-            };
-            self.game_events.push(ge);
+            });
         }
         Ok(())
     }
@@ -905,11 +898,24 @@ pub struct EventField {
     pub data: Option<Variant>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GameEvent {
-    #[serde(rename = "event_name")]
     pub name: String,
-    #[serde(flatten)]
     pub fields: Vec<EventField>,
     pub tick: i32,
+}
+
+impl Serialize for GameEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry(&"tick", &self.tick)?;
+        map.serialize_entry(&"event_name", &self.name)?;
+        for field in &self.fields {
+            map.serialize_entry(&field.name, &field.data)?;
+        }
+        map.end()
+    }
 }

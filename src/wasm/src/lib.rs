@@ -1,6 +1,5 @@
 use parser::exports;
 use parser::parse_demo::ParsingMode;
-use parser::second_pass::parser_settings::create_huffman_lookup_table;
 use parser::serde_helper::to_serde_output;
 use parser::second_pass::variants::Variant;
 use serde::de::Visitor;
@@ -9,7 +8,6 @@ use serde::Deserializer;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::result::Result;
-use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "threads")]
@@ -70,8 +68,7 @@ pub fn parse_event(
     player_props: Option<Vec<String>>,
     other_props: Option<Vec<String>>,
 ) -> Result<JsValue, JsError> {
-    let arc_huf = Arc::new(create_huffman_lookup_table());
-    let game_events = exports::parse_event(&file.into(), &arc_huf, PARSING_MODE, event_name, player_props, other_props).map_err(to_js_error)?;
+    let game_events = exports::parse_event(&file.into(), PARSING_MODE, event_name, player_props, other_props).map_err(to_js_error)?;
 
     serde_wasm_bindgen::to_value(&game_events).map_err(to_js_error)
 }
@@ -83,8 +80,7 @@ pub fn parse_events(
     player_props: Option<Vec<String>>,
     other_props: Option<Vec<String>>,
 ) -> Result<JsValue, JsError> {
-    let arc_huf = Arc::new(create_huffman_lookup_table());
-    let game_events = exports::parse_events(&file.into(), &arc_huf, PARSING_MODE, event_names, player_props, other_props).map_err(to_js_error)?;
+    let game_events = exports::parse_events(&file.into(), PARSING_MODE, event_names, player_props, other_props).map_err(to_js_error)?;
 
     serde_wasm_bindgen::to_value(&game_events).map_err(to_js_error)
 }
@@ -103,10 +99,8 @@ pub fn parse_ticks(
     let wanted_prop_states = HashMap::from_iter(prop_states.unwrap_or_default().into_iter().map(|prop| (prop.prop, prop.state)));
     let order_by_steamid = order_by_steamid.unwrap_or_default();
 
-    let arc_huf = Arc::new(create_huffman_lookup_table());
     let output = exports::parse_ticks(
         &file.into(),
-        &arc_huf,
         PARSING_MODE,
         wanted_props,
         wanted_ticks,
@@ -121,24 +115,21 @@ pub fn parse_ticks(
 
 #[wasm_bindgen(js_name = listGameEvents)]
 pub fn list_game_events(file: Vec<u8>) -> Result<JsValue, JsError> {
-    let arc_huf = Arc::new(create_huffman_lookup_table());
+    let game_events = exports::list_game_events(&file.into(), PARSING_MODE).map_err(to_js_error)?;
 
-    let game_events = exports::list_game_events(&file.into(), &arc_huf, PARSING_MODE).map_err(to_js_error)?;
     serde_wasm_bindgen::to_value(&game_events).map_err(to_js_error)
 }
 
 #[wasm_bindgen(js_name = parseGrenades)]
 pub fn parse_grenades(file: Vec<u8>) -> Result<JsValue, JsError> {
-    let arc_huf = Arc::new(create_huffman_lookup_table());
-    let projectiles = exports::parse_grenades(&file.into(), &arc_huf, PARSING_MODE).map_err(to_js_error)?;
+    let projectiles = exports::parse_grenades(&file.into(), PARSING_MODE).map_err(to_js_error)?;
 
     serde_wasm_bindgen::to_value(&projectiles).map_err(to_js_error)
 }
 
 #[wasm_bindgen(js_name = parseHeader)]
 pub fn parse_header(file: Vec<u8>) -> Result<JsValue, JsError> {
-    let arc_huf = Arc::new(create_huffman_lookup_table());
-    let header = exports::parse_header(&file.into(), &arc_huf, PARSING_MODE).map_err(to_js_error)?;
+    let header = exports::parse_header(&file.into(), PARSING_MODE).map_err(to_js_error)?;
 
     serde_wasm_bindgen::to_value(&header).map_err(to_js_error)
 }

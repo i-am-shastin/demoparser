@@ -1,7 +1,6 @@
 use crate::definitions::DemoParserError;
 use crate::definitions::HEADER_ENDS_AT_BYTE;
 use crate::first_pass::read_bits::read_varint;
-use crate::maps::demo_cmd_type_from_int;
 use csgoproto::EDemoCommands;
 use snap::raw::decompress_len;
 use snap::raw::Decoder;
@@ -60,7 +59,7 @@ impl FrameParser {
         let ends_at = *ptr;
 
         let is_compressed = (cmd & 64) == 64;
-        let demo_cmd = demo_cmd_type_from_int(cmd & !64)?;
+        let demo_cmd = EDemoCommands::try_from(cmd & !64).map_err(|_| DemoParserError::UnknownDemoCmd(cmd & !64))?;
 
         *ptr += size;
 

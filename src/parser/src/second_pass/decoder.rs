@@ -1,5 +1,3 @@
-#![allow(clippy::unnecessary_lazy_evaluations)]
-
 use crate::definitions::DemoParserError;
 use crate::first_pass::read_bits::Bitreader;
 use crate::second_pass::decoder::Decoder::*;

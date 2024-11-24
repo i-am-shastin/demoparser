@@ -48,10 +48,8 @@ fn rm_map_user_friendly_names(names_hm: &AHashMap<String, Variant>) -> Result<AH
         .collect()
 }
 
-pub fn parse_player_skins(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, parsing_mode: ParsingMode) -> Result<Vec<EconItem>, DemoParserError> {
+pub fn parse_player_skins(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<Vec<EconItem>, DemoParserError> {
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: true,
         order_by_steamid: false,
@@ -71,10 +69,8 @@ pub fn parse_player_skins(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, 
     Ok(output.skins)
 }
 
-pub fn parse_grenades(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, parsing_mode: ParsingMode) -> Result<Vec<ProjectileRecord>, DemoParserError> {
+pub fn parse_grenades(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<Vec<ProjectileRecord>, DemoParserError> {
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: true,
         order_by_steamid: false,
@@ -94,10 +90,8 @@ pub fn parse_grenades(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>
     Ok(output.projectiles)
 }
 
-pub fn parse_header(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, parsing_mode: ParsingMode) -> Result<HashMap<String, String, ahash::RandomState>, DemoParserError> {
+pub fn parse_header(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<HashMap<String, String, ahash::RandomState>, DemoParserError> {
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: true,
         order_by_steamid: false,
@@ -117,10 +111,8 @@ pub fn parse_header(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, 
     Ok(output.header.unwrap_or_default().into())
 }
 
-pub fn list_game_events(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, parsing_mode: ParsingMode) -> Result<Vec<String>, DemoParserError> {
+pub fn list_game_events(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<Vec<String>, DemoParserError> {
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: false,
         order_by_steamid: false,
@@ -142,7 +134,6 @@ pub fn list_game_events(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8
 
 pub fn parse_event(
     bytes: &BytesVariant,
-    huffman_lookup_table: &Vec<(u8, u8)>,
     parsing_mode: ParsingMode,
     event_name: String,
     player_props: Option<Vec<String>>,
@@ -154,16 +145,14 @@ pub fn parse_event(
     let real_other_props = rm_user_friendly_names(&other_props)?;
 
     let mut real_name_to_og_name = AHashMap::with_capacity(real_names_player.len() + real_other_props.len());
-    for (real_name, user_friendly_name) in real_names_player.iter().zip(&player_props) {
-        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    for (real_name, user_friendly_name) in real_names_player.iter().zip(player_props) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name);
     }
-    for (real_name, user_friendly_name) in real_other_props.iter().zip(&other_props) {
-        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    for (real_name, user_friendly_name) in real_other_props.iter().zip(other_props) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name);
     }
 
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: true,
         order_by_steamid: false,
@@ -185,7 +174,6 @@ pub fn parse_event(
 
 pub fn parse_events(
     bytes: &BytesVariant,
-    huffman_lookup_table: &Vec<(u8, u8)>,
     parsing_mode: ParsingMode,
     wanted_events: Vec<String>,
     player_props: Option<Vec<String>>,
@@ -197,16 +185,14 @@ pub fn parse_events(
     let real_other_props = rm_user_friendly_names(&other_props)?;
 
     let mut real_name_to_og_name = AHashMap::with_capacity(real_names_player.len() + real_other_props.len());
-    for (real_name, user_friendly_name) in real_names_player.iter().zip(&player_props) {
-        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    for (real_name, user_friendly_name) in real_names_player.iter().zip(player_props) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name);
     }
-    for (real_name, user_friendly_name) in real_other_props.iter().zip(&other_props) {
-        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    for (real_name, user_friendly_name) in real_other_props.iter().zip(other_props) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name);
     }
 
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: true,
         order_by_steamid: false,
@@ -226,10 +212,8 @@ pub fn parse_events(
     Ok(output.game_events)
 }
 
-pub fn parse_player_info(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, parsing_mode: ParsingMode) -> Result<Vec<PlayerEndMetaData>, DemoParserError> {
+pub fn parse_player_info(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<Vec<PlayerEndMetaData>, DemoParserError> {
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: true,
         order_by_steamid: false,
@@ -252,8 +236,6 @@ pub fn parse_player_info(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u
 #[cfg(feature = "voice")]
 pub fn parse_voice(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<Vec<(String, Vec<u8>)>, DemoParserError> {
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table: &vec![],
         only_convars: false,
         only_header: false,
         order_by_steamid: false,
@@ -273,10 +255,8 @@ pub fn parse_voice(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<Ve
     convert_voice_data_to_wav(output.voice_data)
 }
 
-pub fn parse_item_drops(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8)>, parsing_mode: ParsingMode) -> Result<Vec<EconItem>, DemoParserError> {
+pub fn parse_item_drops(bytes: &BytesVariant, parsing_mode: ParsingMode) -> Result<Vec<EconItem>, DemoParserError> {
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: true,
         order_by_steamid: false,
@@ -299,7 +279,6 @@ pub fn parse_item_drops(bytes: &BytesVariant, huffman_lookup_table: &Vec<(u8, u8
 #[allow(clippy::too_many_arguments)]
 pub fn parse_ticks(
     bytes: &BytesVariant,
-    huffman_lookup_table: &Vec<(u8, u8)>,
     parsing_mode: ParsingMode,
     wanted_props: Vec<String>,
     wanted_ticks: Option<Vec<i32>>,
@@ -311,16 +290,14 @@ pub fn parse_ticks(
     let real_wanted_prop_states = rm_map_user_friendly_names(&wanted_prop_states)?;
 
     let mut real_name_to_og_name = AHashMap::with_capacity(real_names.len() + real_wanted_prop_states.len());
-    for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
-        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    for (real_name, user_friendly_name) in real_names.iter().zip(wanted_props) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name);
     }
-    for (real_name, user_friendly_name) in real_wanted_prop_states.keys().zip(wanted_prop_states.keys()) {
-        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    for (real_name, user_friendly_name) in real_wanted_prop_states.keys().zip(wanted_prop_states.into_keys()) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name);
     }
 
     let settings = ParserInputs {
-        count_props: false,
-        huffman_lookup_table,
         only_convars: false,
         only_header: false,
         order_by_steamid,

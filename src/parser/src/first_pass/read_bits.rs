@@ -9,7 +9,6 @@ pub struct Bitreader<'a> {
     pub total_bits_left: u32,
 }
 
-#[allow(clippy::unnecessary_lazy_evaluations)]
 pub fn read_varint(bytes: &[u8], ptr: &mut usize) -> Result<u32, DemoParserError> {
     let mut result: u32 = 0;
     for i in 0..5 {

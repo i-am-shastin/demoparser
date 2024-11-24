@@ -1,5 +1,3 @@
-#![allow(clippy::unnecessary_lazy_evaluations)]
-
 use crate::definitions::DemoParserError;
 use crate::first_pass::parser_settings::FirstPassParser;
 use crate::first_pass::read_bits::Bitreader;
@@ -69,10 +67,10 @@ impl<'a> FirstPassParser<'a> {
     #[inline(always)]
     pub fn parse_create_stringtable(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
         let table = CsvcMsgCreateStringTable::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
-
-        if !(table.name() == "instancebaseline" || table.name() == "userinfo") {
+        if !matches!(table.name(), "instancebaseline" | "userinfo") {
             return Ok(());
         }
+
         let bytes = if table.data_compressed() {
             &Decoder::new().decompress_vec(table.string_data()).map_err(|_| DemoParserError::MalformedMessage)?
         } else {
@@ -99,7 +97,7 @@ impl<'a> FirstPassParser<'a> {
         user_data_fixed: bool,
         user_data_size: i32,
         flags: i32,
-        variant_bit_count: bool,
+        var_bit_counts: bool,
     ) -> Result<(), DemoParserError> {
         let mut bitreader = Bitreader::new(bytes);
         let mut idx = -1;
@@ -153,7 +151,7 @@ impl<'a> FirstPassParser<'a> {
                 };
                 let size = if user_data_fixed {
                     user_data_size as u32
-                } else if variant_bit_count {
+                } else if var_bit_counts {
                     bitreader.read_u_bit_var()? * 8
                 } else {
                     bitreader.read_nbits(17)? * 8
@@ -171,10 +169,8 @@ impl<'a> FirstPassParser<'a> {
                         self.stringtable_players.insert(player.userid, player);
                     }
                 }
-            } else if name == "instancebaseline" {
-                if let Ok(cls_id) = key.parse::<u32>() {
-                    self.baselines.insert(cls_id, value.clone());
-                }
+            } else if let Ok(cls_id) = key.parse::<u32>() {
+                self.baselines.insert(cls_id, value.clone());
             }
 
             items.push(StringTableEntry {
@@ -189,149 +185,165 @@ impl<'a> FirstPassParser<'a> {
             user_data_size,
             user_data_fixed,
             flags,
-            var_bit_counts: variant_bit_count,
+            var_bit_counts,
         });
         Ok(())
     }
 }
 
 impl<'a> SecondPassParser<'a> {
-    #[inline(always)]
-    pub fn update_string_table(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
-        let table = CsvcMsgUpdateStringTable::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
-        let Some(st) = self.string_tables.get(table.table_id() as usize) else { return Ok(()) };
-        self.parse_string_table(
-            table.string_data(),
-            table.num_changed_entries(),
-            st.name.to_owned(),
-            st.user_data_fixed,
-            st.user_data_size,
-            st.flags,
-            st.var_bit_counts,
-        )
-    }
+    // #[inline(never)]
+    // pub fn update_string_table(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
+    //     let table = CsvcMsgUpdateStringTable::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
+    //     let Some(st) = self.string_tables.get(table.table_id() as usize) else { return Ok(()) };
+    //     self.parse_string_table(
+    //         table.string_data(),
+    //         table.num_changed_entries(),
+    //         st.name.to_owned(),
+    //         st.user_data_fixed,
+    //         st.user_data_size,
+    //         st.flags,
+    //         st.var_bit_counts,
+    //     )
+    // }
 
-    #[inline(always)]
-    pub fn parse_create_stringtable(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
-        let table = CsvcMsgCreateStringTable::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
-        let bytes = if table.data_compressed() {
-            &Decoder::new().decompress_vec(table.string_data()).map_err(|_| DemoParserError::MalformedMessage)?
-        } else {
-            table.string_data()
-        };
+    // #[inline(never)]
+    // pub fn parse_create_stringtable(&mut self, bytes: &[u8]) -> Result<(), DemoParserError> {
+    //     let table = CsvcMsgCreateStringTable::decode(bytes).map_err(|_| DemoParserError::MalformedMessage)?;
+    //     if !matches!(table.name(), "instancebaseline" | "userinfo") {
+    //         return Ok(());
+    //     }
 
-        self.parse_string_table(
-            bytes,
-            table.num_entries(),
-            table.name().to_string(),
-            table.user_data_fixed_size(),
-            table.user_data_size(),
-            table.flags(),
-            table.using_varint_bitcounts(),
-        )
-    }
+    //     let bytes = if table.data_compressed() {
+    //         &Decoder::new().decompress_vec(table.string_data()).map_err(|_| DemoParserError::MalformedMessage)?
+    //     } else {
+    //         table.string_data()
+    //     };
 
-    #[allow(clippy::too_many_arguments)]
-    fn parse_string_table(
-        &mut self,
-        bytes: &[u8],
-        n_updates: i32,
-        name: String,
-        user_data_fixed: bool,
-        user_data_size: i32,
-        flags: i32,
-        variant_bit_count: bool,
-    ) -> Result<(), DemoParserError> {
-        let mut bitreader = Bitreader::new(bytes);
-        let mut idx = -1;
-        let mut keys: Vec<String> = Vec::with_capacity(32);
-        let mut items = Vec::with_capacity(n_updates as usize);
+    //     self.parse_string_table(
+    //         bytes,
+    //         table.num_entries(),
+    //         table.name().to_string(),
+    //         table.user_data_fixed_size(),
+    //         table.user_data_size(),
+    //         table.flags(),
+    //         table.using_varint_bitcounts(),
+    //     )
+    // }
 
-        for _ in 0..n_updates {
-            // Increment index
-            if bitreader.read_boolean()? {
-                idx += 1
-            } else {
-                idx += (bitreader.read_varint()? + 1) as i32
-            }
+    // #[allow(clippy::too_many_arguments)]
+    // fn parse_string_table(
+    //     &mut self,
+    //     bytes: &[u8],
+    //     n_updates: i32,
+    //     name: String,
+    //     user_data_fixed: bool,
+    //     user_data_size: i32,
+    //     flags: i32,
+    //     var_bit_counts: bool,
+    // ) -> Result<(), DemoParserError> {
+    //     let mut bitreader = Bitreader::new(bytes);
+    //     let mut idx = -1;
+    //     let mut keys: Vec<String> = Vec::with_capacity(32);
+    //     let mut items = Vec::with_capacity(n_updates as usize);
 
-            // Does the value have a key
-            if !bitreader.read_boolean()? {
-                continue;
-            }
+    //     for _ in 0..n_updates {
+    //         // Increment index
+    //         if bitreader.read_boolean()? {
+    //             idx += 1
+    //         } else {
+    //             idx += (bitreader.read_varint()? + 1) as i32
+    //         }
 
-            // Should we refer back to history (similar to LZ77)
-            let key = if bitreader.read_boolean()? {
-                // How far into history we should look
-                let position = bitreader.read_nbits(5)? as usize;
-                // How many bytes in a row, starting from distance ago, should be copied
-                let length = bitreader.read_nbits(5)? as usize;
+    //         // Does the value have a key
+    //         if !bitreader.read_boolean()? {
+    //             continue;
+    //         }
 
-                if position >= keys.len() {
-                    bitreader.read_string()?
-                } else if let Some(s) = keys.get(position) {
-                    let l = length.min(s.len());
-                    s[0..l].to_owned() + &bitreader.read_string()?
-                } else {
-                    String::new()
-                }
-            } else {
-                bitreader.read_string()?
-            };
+    //         // Should we refer back to history (similar to LZ77)
+    //         let key = if bitreader.read_boolean()? {
+    //             // How far into history we should look
+    //             let position = bitreader.read_nbits(5)? as usize;
+    //             // How many bytes in a row, starting from distance ago, should be copied
+    //             let length = bitreader.read_nbits(5)? as usize;
 
-            if keys.len() >= 32 {
-                keys.remove(0);
-            }
-            keys.push(key.clone());
+    //             if position >= keys.len() {
+    //                 bitreader.read_string()?
+    //             } else if let Some(s) = keys.get(position) {
+    //                 let l = length.min(s.len());
+    //                 s[0..l].to_owned() + &bitreader.read_string()?
+    //             } else {
+    //                 String::new()
+    //             }
+    //         } else {
+    //             bitreader.read_string()?
+    //         };
 
-            let mut value = vec![];
-            // Does the entry have a value
-            if bitreader.read_boolean()? {
-                let is_compressed = if !user_data_fixed && (flags & 0x1) != 0 {
-                    bitreader.read_boolean()?
-                } else {
-                    false
-                };
-                let size = if user_data_fixed {
-                    user_data_size as u32
-                } else if variant_bit_count {
-                    bitreader.read_u_bit_var()? * 8
-                } else {
-                    bitreader.read_nbits(17)? * 8
-                };
+    //         if keys.len() >= 32 {
+    //             keys.remove(0);
+    //         }
+    //         keys.push(key.clone());
 
-                value = bitreader.read_n_bytes((size.checked_div(8).unwrap_or(0)) as usize)?;
-                if is_compressed {
-                    value = Decoder::new().decompress_vec(&value).map_err(|_| DemoParserError::MalformedMessage)?
-                }
-            }
+    //         let mut value = vec![];
+    //         // Does the entry have a value
+    //         if bitreader.read_boolean()? {
+    //             let is_compressed = if !user_data_fixed && (flags & 0x1) != 0 {
+    //                 bitreader.read_boolean()?
+    //             } else {
+    //                 false
+    //             };
+    //             let size = if user_data_fixed {
+    //                 user_data_size as u32
+    //             } else if var_bit_counts {
+    //                 bitreader.read_u_bit_var()? * 8
+    //             } else {
+    //                 bitreader.read_nbits(17)? * 8
+    //             };
 
-            if name == "userinfo" {
-                if let Ok(player) = UserInfo::from_bytes(&value) {
-                    if player.steamid != 0 {
-                        self.stringtable_players.insert(player.userid, player);
-                    }
-                }
-            } else if name == "instancebaseline" {
-                if let Ok(cls_id) = key.parse::<u32>() {
-                    self.baselines.insert(cls_id, value.clone());
-                }
-            }
+    //             value = bitreader.read_n_bytes((size.checked_div(8).unwrap_or(0)) as usize)?;
+    //             if is_compressed {
+    //                 value = Decoder::new().decompress_vec(&value).map_err(|_| DemoParserError::MalformedMessage)?
+    //             }
+    //         }
 
-            items.push(StringTableEntry {
-                idx,
-                key,
-                value,
-            });
-        }
-        self.string_tables.push(StringTable {
-            data: items,
-            name,
-            user_data_size,
-            user_data_fixed,
-            flags,
-            var_bit_counts: variant_bit_count,
-        });
-        Ok(())
-    }
+    //         if name == "userinfo" {
+    //             if let Ok(player) = UserInfo::from_bytes(&value) {
+    //                 if player.steamid != 0 {
+    //                     if let std::collections::btree_map::Entry::Vacant(e) = self.stringtable_players.entry(player.userid) {
+    //                         e.insert(player);
+    //                     } else {
+    //                         // println!("--------CONTAINS PLAYER-----------")
+    //                     }
+    //                 } else {
+    //                     // println!("STEAMID ZERO!!!!!, {:?}", player)
+    //                 }
+    //             }
+    //         } else if let Ok(cls_id) = key.parse::<u32>() {
+    //             if !self.baselines.contains_key(&cls_id) {
+    //                 let _a = self.baselines.insert(cls_id, value.clone());
+    //                 // if let Some(a) = a {
+    //                 //     let c = a.len() == value.len() && a.len() == a.iter().zip(value.iter()).filter(|&(a, b)| a == b).count();
+    //                 //     println!("SOME {cls_id}, COUNT: {c}")
+    //                 // }
+    //             } else {
+    //                 // println!("***HAS BASELINE***, {:?}", cls_id)
+    //             }
+    //         }
+
+    //         items.push(StringTableEntry {
+    //             idx,
+    //             key,
+    //             value,
+    //         });
+    //     }
+    //     self.string_tables.push(StringTable {
+    //         data: items,
+    //         name,
+    //         user_data_size,
+    //         user_data_fixed,
+    //         flags,
+    //         var_bit_counts,
+    //     });
+    //     Ok(())
+    // }
 }
