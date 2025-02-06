@@ -12,7 +12,7 @@ use crate::second_pass::variants::VarVec;
 use crate::second_pass::variants::{PropColumn, Variant};
 use ahash::AHashMap;
 use ahash::AHashSet;
-use csgoproto::netmessages::CSVCMsg_VoiceData;
+use csgoproto::CsvcMsgVoiceData;
 use itertools::Itertools;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::prelude::ParallelIterator;
@@ -34,7 +34,7 @@ pub struct DemoOutput {
     pub player_md: Vec<PlayerEndMetaData>,
     pub game_events_counter: AHashSet<String>,
     pub projectiles: Vec<ProjectileRecord>,
-    pub voice_data: Vec<CSVCMsg_VoiceData>,
+    pub voice_data: Vec<CsvcMsgVoiceData>,
     pub prop_controller: PropController,
     pub df_per_player: AHashMap<u64, AHashMap<u32, PropColumn>>,
 }
@@ -46,6 +46,7 @@ pub struct Parser<'a> {
 #[derive(PartialEq)]
 pub enum ParsingMode {
     ForceSingleThreaded,
+    ForceRayonThreaded,
     ForceMultiThreaded,
     Normal,
 }
@@ -59,11 +60,10 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_demo(&mut self, demo_bytes: &[u8]) -> Result<DemoOutput, DemoParserError> {
+        let multithreadable = check_multithreadability(&self.input.wanted_player_props);
+
         // Multi threaded second pass
-        if self.parsing_mode == ParsingMode::ForceMultiThreaded
-            || check_multithreadability(&self.input.wanted_player_props)
-                && !(self.parsing_mode == ParsingMode::ForceSingleThreaded)
-        {
+        if self.parsing_mode == ParsingMode::ForceMultiThreaded || (multithreadable && self.parsing_mode == ParsingMode::Normal) {
             let (sender, receiver) = channel();
             let mut fp = FrameParser::new();
             return thread::scope(|s| {
@@ -75,10 +75,16 @@ impl<'a> Parser<'a> {
                 }
             });
         }
-        // Single threaded second pass
         let mut first_pass_parser = FirstPassParser::new(&self.input);
-        let first_pass_output = first_pass_parser.parse_demo(&demo_bytes, false)?;
-        return self.second_pass_single_threaded(demo_bytes, first_pass_output);
+        let first_pass_output = first_pass_parser.parse_demo(demo_bytes, false)?;
+
+        if multithreadable && self.parsing_mode != ParsingMode::ForceSingleThreaded {
+            // Rayon-based multi threaded second pass
+            return self.second_pass_multi_threaded_no_channels(demo_bytes, first_pass_output);
+        }
+
+        // Single threaded second pass
+        self.second_pass_single_threaded(demo_bytes, first_pass_output)
     }
 
     fn second_pass_single_threaded(
