@@ -1,6 +1,15 @@
-use std::io::Result;
+use std::{io::Result, process::Command};
 
 fn main() -> Result<()> {
+    Command::new("git")
+        .args([
+            "clone",
+            "https://github.com/SteamDatabase/Protobufs.git",
+            "--depth",
+            "1",
+        ])
+        .status()?;
+
     let protos = vec![
         "Protobufs/csgo/steammessages.proto",
         "Protobufs/csgo/gcsdk_gcmessages.proto",
